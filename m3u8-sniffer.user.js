@@ -3,7 +3,7 @@
 // @name:zh-TW   M3U8 嗅探下載器（本地版）
 // @name:en      M3U8 Sniffer & Downloader (Local)
 // @namespace    https://github.com/jx0876/m3u8-sniffer
-// @version      1.4.0
+// @version      1.5.0
 // @updateURL    https://raw.githubusercontent.com/jx0876/m3u8-sniffer/main/m3u8-sniffer.user.js
 // @downloadURL  https://raw.githubusercontent.com/jx0876/m3u8-sniffer/main/m3u8-sniffer.user.js
 // @description  純本地嗅探並下載頁面 m3u8 / mp4 影音。雙嗅探（攔 XHR/fetch + PerformanceObserver），WebCrypto AES-128 解密，並發下載合併，玻璃感介面。無廣告、無導流、不外送任何網址。
@@ -219,13 +219,19 @@
                 let { text } = await fetchText(task.url);
                 let parsed = parseM3U8(text, task.url);
 
-                // 主清單 → 選最高解析度子清單
+                // 主清單 → 選子清單（由高到低排序；多畫質且有 pickQuality 則讓使用者挑，否則自動最高）
                 if (parsed.master) {
-                    const best = parsed.variants.slice().sort((a, b) =>
-                        (b.bandwidth - a.bandwidth) || (resPixels(b.resolution) - resPixels(a.resolution)))[0];
-                    task.url = best.url;
-                    ({ text } = await fetchText(best.url));
-                    parsed = parseM3U8(text, best.url);
+                    const vs = parsed.variants.slice().sort((a, b) =>
+                        (b.bandwidth - a.bandwidth) || (resPixels(b.resolution) - resPixels(a.resolution)));
+                    let chosenUrl;
+                    if (task.pickQuality && vs.length > 1) {
+                        chosenUrl = await task.pickQuality(vs);
+                    } else {
+                        chosenUrl = vs[0].url;
+                    }
+                    task.url = chosenUrl;
+                    ({ text } = await fetchText(chosenUrl));
+                    parsed = parseM3U8(text, chosenUrl);
                 }
 
                 const segs = parsed.segments;
@@ -605,12 +611,14 @@
                 <button class="btn copy">複製</button>
                 <button class="btn dl">下載</button>
                 <button class="btn stop hidden">中斷</button>
-                <span class="prog"></span>`;
+                <span class="prog"></span>
+                <span class="qbox"></span>`;
 
             const fname = row.querySelector(".fname");
             const dlBtn = row.querySelector(".dl");
             const stopBtn = row.querySelector(".stop");
             const prog = row.querySelector(".prog");
+            const qbox = row.querySelector(".qbox");
 
             row.querySelector(".copy").addEventListener("click", () => {
                 GM_setClipboard(res.url);
@@ -625,6 +633,19 @@
                     onProgress: (r, txt) => { prog.textContent = txt || Math.round(r * 100) + "%"; },
                     onDone: () => { prog.textContent = "完成 ✓"; dlBtn.classList.remove("hidden"); stopBtn.classList.add("hidden"); controller = null; },
                     onError: (e) => { prog.textContent = "錯誤"; prog.title = String(e && e.message || e); dlBtn.classList.remove("hidden"); stopBtn.classList.add("hidden"); controller = null; },
+                    // master 多畫質 → 跳按鈕讓使用者挑（variants 已由高到低排序，第一個=最高）
+                    pickQuality: (variants) => new Promise((resolve) => {
+                        prog.textContent = "選畫質：";
+                        qbox.innerHTML = "";
+                        variants.forEach((v, i) => {
+                            const b = document.createElement("button");
+                            b.className = "btn q" + (i === 0 ? " qbest" : "");
+                            const h = (String(v.resolution || "").match(/x(\d+)/) || [])[1];
+                            b.textContent = (h ? h + "p" : (v.bandwidth ? Math.round(v.bandwidth / 1000) + "k" : "?")) + (i === 0 ? " ★" : "");
+                            b.addEventListener("click", () => { qbox.innerHTML = ""; prog.textContent = "解析中…"; resolve(v.url); });
+                            qbox.appendChild(b);
+                        });
+                    }),
                 };
                 dlBtn.classList.add("hidden");
                 stopBtn.classList.remove("hidden");
@@ -747,6 +768,10 @@
     .btn.stop { background: #ef4444; }
     .btn.hidden { display: none; }
     .prog { font-size: 11px; opacity: .85; min-width: 36px; }
+    .qbox { display: flex; flex-wrap: wrap; gap: 4px; }
+    .btn.q { background: rgba(255,255,255,.14); padding: 3px 8px; }
+    .btn.q.qbest { background: linear-gradient(135deg,#6366f1,#8b5cf6); }
+    .btn.q:hover { filter: brightness(1.15); }
     .foot { padding: 7px 14px; font-size: 11px; opacity: .45; text-align: center; border-top: 1px solid rgba(255,255,255,.06); }
     `;
 
