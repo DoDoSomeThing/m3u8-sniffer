@@ -6,6 +6,41 @@
 
 ---
 
+## ✅ 實作現況（2026-07-05 更新，接手看這段）
+
+**P1–P3 全做完並實測打通，還超出原規劃加了「一鍵喚起 App + 規格小窗 + hover 框選」。** 全上 GitHub commit `ff56c85`。實際用法見 `README.md`。
+
+### 檔案地圖
+- `extension/` — 原生擴充。`manifest.json`(MV3) · `background.js`(webRequest 全域嗅探 + JOBS/PENDING 轉發 + badge) · `sniff.js`(all_frames+document_start：注入 inject + DOM 掃描 + hover 框選) · `inject.js`(頁面 context hook fetch/XHR 讀 body) · `content.js`(頁內浮動面板) · `popup.js/html`(工具列面板)
+- `server.js` — 下載後端。`/enqueue`(GET+POST) · `/jobs`+`/jobs/cancel`(進度/取消) · `/pending`+`/pending/list`+`/pending/resolve`(規格小窗待確認) · `/probe`(畫質) · `/download`(SSE)
+- `gui.html` — 進度介面 + 規格小窗(modal)
+- `影片下載器.applescript` → 編進 `.app`；`.command`/`.bat` — 啟動器
+
+### 比原 SPEC 多做的
+1. **全格式**（不只 m3u8）：mp4/mpd/webm/mkv/mov/m4v/flv + Content-Type 偽裝補抓（anime1 是 mp4，逼出這需求）。
+2. **內容嗅探 + DOM 掃描**（移植油猴）：`inject.js` hook fetch/XHR 讀 body 抓偽裝/blob；`sniff.js` 掃 `<video>/<source>`，跨 iframe。
+3. **`videodl://` URL scheme 一鍵喚起 App**：擴充按下載 → macOS 啟動 `影片下載器.app` → 自動起 server + 開窗 + 送下載。server 沒開也自動啟。
+4. **規格小窗（A）**：scheme 不直接下，先進 server `/pending` → GUI 跳窗選畫質/檔名/位置 → 確認才 `/enqueue`。
+5. **hover 框選影片（B）**：hover 面板清單 → 頁面上對應 `<video>` 被紫框框起（精準＋全部後備）。
+6. **cookie 破 403**：`--cookies-from-browser chrome`（anime1/CF+cookie 站）。
+7. **App 體驗**：Chrome app 模式視窗（無網址列）；雙擊只背景起 server；可見 Terminal 當運作指示燈（Ctrl+C/關窗即停）。
+8. **藥丸拖曳＋記位置**、清除保護下載中、單筆取消真 kill、context 失效防護。
+
+### 關鍵踩雷（別重踩）
+- content script 在 https 頁 fetch `http://127.0.0.1` 被擋 mixed-content → **下載一律走 background 或 scheme**。
+- webRequest 三監聽器並發寫 storage 會互蓋 → `mutate()` promise 鏈序列化。
+- 改 `main.scpt` 會壞 .app 簽章 → 每次 `codesign --force --deep -s -` 重簽；改 Info.plist scheme 後要 `lsregister -f`。
+- 改 `server.js` 後 `.command` 會偵測舊版(戳 /enqueue 回 404)自動 pkill 重啟。
+
+### 沒做 / 未來
+- 不搬油猴的 AES 解密 / ts→mp4 remux / mp4 多線程（yt-dlp 已包辦，冗餘）。
+- P4 上架 Chrome Web Store（選配，$5）。
+- i18n（第一版只 zh-TW）。
+
+> 以下為 2026-07-04 原始規劃，保留供參考。實際實作已如上超出。
+
+---
+
 ## 1. 為什麼做
 
 - userscript 只能在頁面內攔 XHR/fetch，跨域 iframe 播放器（如 playmogo）常嗅不到。
