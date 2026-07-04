@@ -215,9 +215,12 @@ const server = http.createServer(async (req, res) => {
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
     b.name = sanitizeName(b.name);
 
-    // --cookies-from-browser chrome：借瀏覽器 cookie，破 anime1 / CF+cookie 鎖站的 403
+    // --cookies-from-browser：借「觸發下載的那個瀏覽器」的 cookie（Brave 嗅到的要借 Brave 的，
+    // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403）。破 anime1 / CF+cookie 鎖站。
+    const COOKIE_BROWSERS = { chrome: "chrome", brave: "brave", edge: "edge", opera: "opera", vivaldi: "vivaldi" };
+    const cookieSrc = COOKIE_BROWSERS[b.browser] || "chrome";
     const outDir = expandDir(b.dir);
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", "chrome"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc];
     if (b.format) args.push("-f", b.format);
     if (b.referer) args.push("--referer", b.referer);
     args.push("-o", path.join(outDir, (b.name ? b.name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), b.url);
@@ -239,11 +242,13 @@ const server = http.createServer(async (req, res) => {
       const p = spawnDl(args); // detached=自成 process group（取消時連 ffmpeg 一起殺），server 仍追蹤進度
       PROCS[job.id] = p;
       let lastErr = "";
+      let skipped = false;
       const onLine = (buf) => {
         for (const line of buf.toString().split(/\r?\n/)) {
           if (!line.trim()) continue;
           const dest = line.match(/Destination:\s*(.+)$/);
           if (dest) job.name = dest[1].split("/").pop();
+          if (/has already been downloaded/.test(line)) skipped = true; // 同名檔已存在，yt-dlp 沒下就收工
           const m = line.match(/\[download\]\s+([\d.]+)%/);
           if (m) { job.pct = parseFloat(m[1]); job.log = line; }
           else { job.log = line; if (/error|ERROR/.test(line)) lastErr = line; }
@@ -254,7 +259,7 @@ const server = http.createServer(async (req, res) => {
       p.on("close", (code) => {
         delete PROCS[job.id];
         if (job.status === "cancelled") return; // 使用者取消，不覆寫
-        if (code === 0) { job.status = "done"; job.pct = 100; job.log = "完成"; }
+        if (code === 0) { job.status = "done"; job.pct = 100; job.log = skipped ? "⚠ 同名檔已存在，未重新下載（要重下請先刪/改名舊檔）" : "完成"; }
         else { job.status = "error"; job.log = lastErr || ("yt-dlp 結束碼 " + code); }
       });
       p.on("error", (e) => { delete PROCS[job.id]; job.status = "error"; job.log = "找不到 yt-dlp：" + e.message; });
@@ -283,9 +288,10 @@ const server = http.createServer(async (req, res) => {
       url: u.searchParams.get("url") || "",
       referer: u.searchParams.get("referer") || "",
       name: u.searchParams.get("name") || "",
+      browser: u.searchParams.get("browser") || "",
     };
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
-    const item = { id: "p" + (++pendSeq), url: b.url, referer: b.referer || "", name: sanitizeName(b.name || ""), ts: Date.now() };
+    const item = { id: "p" + (++pendSeq), url: b.url, referer: b.referer || "", name: sanitizeName(b.name || ""), browser: b.browser || "", ts: Date.now() };
     PENDING.push(item);
     if (PENDING.length > 20) PENDING.shift();
     console.log("[pending] " + item.url);

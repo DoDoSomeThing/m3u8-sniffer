@@ -51,7 +51,7 @@ if (window.top === window) {
 <div class="pill" title="M3U8 嗅探"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M8 5v14l11-7z"/></svg><span class="badge" hidden>0</span></div>
 <div class="panel">
   <div class="head"><b>M3U8 嗅探</b><span class="x" title="關閉">✕</span></div>
-  <div class="manual"><input class="mInput" placeholder="貼 m3u8 網址手動下載（自動漏抓時用）"><button class="mBtn">加入</button></div>
+  <div class="manual"><input class="mInput" placeholder="貼 m3u8 網址手動下載（自動漏抓時用）"><button class="mBtn">加入</button><button class="mBtn pg" title="把這個網頁的網址直接交給 yt-dlp 解析下載（X/YouTube 等支援站最穩）">本頁</button></div>
   <div class="toast"></div>
   <div class="list"><div class="empty">尚未嗅到 m3u8</div></div>
 </div>`;
@@ -150,6 +150,9 @@ if (window.top === window) {
       refresh();
     };
     mInput.addEventListener("keydown", (e) => { if (e.key === "Enter") $(".mBtn").click(); });
+
+    // 「本頁」：整頁網址交給 yt-dlp 直解（X/YouTube 等 1800+ 支援站最穩，不用跟切片捉迷藏）
+    $(".pg").onclick = () => startDownload({ url: location.href, referer: "" });
 
     // ── 藥丸拖曳 + 位置記憶（8）──
     function setPillPos(left, top) {

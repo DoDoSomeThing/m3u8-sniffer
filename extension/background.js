@@ -11,6 +11,9 @@ function extType(url) {
   const m = url.match(VIDEO_EXT);
   return m ? m[1].toLowerCase() : null;
 }
+// 串流切片：一支影片幾百塊，抓了洗版還會讓人誤下到碎片（X 的 .m4s 就標 video/mp4）
+// → 不收。抓 .m3u8/.mpd 母清單才是完整影片。
+const SEG_EXT = /\.(ts|m4s|init|seg|frag|key|vtt|srt|aac)(\?|#|$)/i;
 // 偽裝副檔名靠 Content-Type 補抓（.txt / 無副檔名卻是影片或 HLS/DASH 清單）
 function ctType(ct) {
   if (/mpegurl/i.test(ct)) return "m3u8";
@@ -107,9 +110,30 @@ chrome.webRequest.onHeadersReceived.addListener(
     if (d.tabId < 0) return;
     const h = d.responseHeaders || [];
     const ct = h.find((x) => x.name.toLowerCase() === "content-type")?.value || "";
+    if (SEG_EXT.test(d.url)) return; // 切片碎塊，不收（Content-Type 常偽裝成 video/mp4）
     const urlT = extType(d.url);
     const ctT = ctType(ct);
     if (!urlT && !ctT) return; // 非影片
+
+    // DASH init 標頭偽裝成 .mp4（X 的只有 ~786B）：完整影片不會 <100KB。
+    // 這種 URL 帶副檔名，onBeforeRequest 已先收了 → 這裡看到 Content-Length 太小就踢掉。
+    // 只套用在 mp4 類容器；m3u8/mpd 清單檔本來就小，不套用。
+    const t0 = urlT || ctT;
+    if (t0 !== "m3u8" && t0 !== "mpd") {
+      const clen = parseInt(h.find((x) => x.name.toLowerCase() === "content-length")?.value || "0", 10);
+      if (d.statusCode === 200 && clen > 0 && clen < 102400) {
+        mutate((all) => {
+          const list = all[d.tabId];
+          if (!list) return false;
+          const i = list.findIndex((r) => r.url === d.url);
+          if (i < 0) return false;
+          list.splice(i, 1);
+          setBadge(d.tabId, list.length);
+          return true;
+        });
+        return;
+      }
+    }
 
     // CF 特徵：cf-ray / server: cloudflare → 這站多半 CF+cookie 鎖，yt-dlp 外部下載易撞牆
     const cf = h.some((x) => {
@@ -136,18 +160,40 @@ function clearTab(tabId) {
   mutate((all) => { if (all[tabId]) { delete all[tabId]; return true; } return false; })
     .then(() => setBadge(tabId, 0));
 }
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading" && changeInfo.url) clearTab(tabId);
-});
-// SPA(pushState) 換頁不觸發 onUpdated{loading,url} → 舊資源會殘留混進新頁，這裡補清。
-// 只在 pathname 真的變了才清（播放器常 pushState 改 query/時間戳，那不算換片）。
-const TAB_PATH = {}; // tabId → 上次 pathname（worker 休眠會歸零，只影響漏清一次，可接受）
-chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
+// tabId → 上次 pathname（SPA 換頁判斷基準）。
+// 記憶體只當快取：service worker 閒置 ~30 秒就休眠、記憶體歸零，
+// 基準必須落在 storage.session 才不會「看片超過 30 秒後換頁不重置」。
+const TAB_PATH = {};
+async function loadPath(tabId) {
+  if (TAB_PATH[tabId] !== undefined) return TAB_PATH[tabId];
+  const o = await chrome.storage.session.get("tabPaths");
+  return (o.tabPaths || {})[tabId];
+}
+function savePath(tabId, p) {
+  TAB_PATH[tabId] = p;
+  chrome.storage.session.get("tabPaths").then((o) => {
+    const tp = o.tabPaths || {};
+    tp[tabId] = p;
+    chrome.storage.session.set({ tabPaths: tp });
+  }).catch(() => {});
+}
+// 每次真正導航（換頁/重整/前後退）一律重置該分頁清單，順便記 pathname 基準
+chrome.webNavigation.onCommitted.addListener((d) => {
   if (d.frameId !== 0) return;
   let p = "";
   try { p = new URL(d.url).pathname; } catch {}
-  if (TAB_PATH[d.tabId] !== undefined && TAB_PATH[d.tabId] !== p) clearTab(d.tabId);
-  TAB_PATH[d.tabId] = p;
+  savePath(d.tabId, p);
+  clearTab(d.tabId);
+});
+// SPA(pushState) 換頁不觸發 onCommitted → 舊資源會殘留混進新頁，這裡補清。
+// 只在 pathname 真的變了才清（播放器常 pushState 改 query/時間戳，那不算換片）。
+chrome.webNavigation.onHistoryStateUpdated.addListener(async (d) => {
+  if (d.frameId !== 0) return;
+  let p = "";
+  try { p = new URL(d.url).pathname; } catch {}
+  const prev = await loadPath(d.tabId);
+  savePath(d.tabId, p);
+  if (prev !== p) clearTab(d.tabId); // 沒基準(undefined)也清：寧可多清不殘留
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   delete TAB_PATH[tabId];

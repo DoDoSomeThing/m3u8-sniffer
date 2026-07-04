@@ -293,7 +293,7 @@ $("spCancel").addEventListener("click", async ()=>{ const id=curPending&&curPend
 $("spOk").addEventListener("click", async ()=>{
   const item=curPending; if(!item) return;
   const dir=$("spDir").value.trim(); localStorage.setItem("dl_dir", dir);
-  const body={ url:item.url, referer:item.referer, name:$("spName").value.trim(), format:$("spQuality").value, dir };
+  const body={ url:item.url, referer:item.referer, name:$("spName").value.trim(), format:$("spQuality").value, dir, browser:item.browser||"" };
   closeSpec();
   await resolvePending(item.id);
   try{ await fetch("/enqueue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); toast("開始下載"); }
