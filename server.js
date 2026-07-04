@@ -18,11 +18,40 @@ const PROCS = {}; // jobId → yt-dlp child process（供取消 kill；不進 JS
 let PENDING = [];
 let pendSeq = 0;
 
-// 展開路徑開頭的 ~ / $HOME
+// 展開路徑開頭的 ~ / $HOME；resolve 後限制在 home 或 /Volumes 下（防路徑穿越亂寫檔）
 function expandDir(dir) {
   if (!dir) return DLDIR;
   dir = dir.replace(/^~(?=\/|$)/, os.homedir()).replace(/^\$HOME/, os.homedir());
-  return dir;
+  const abs = path.resolve(dir);
+  const home = os.homedir();
+  if (abs === home || abs.startsWith(home + path.sep) || abs.startsWith("/Volumes" + path.sep)) return abs;
+  return DLDIR;
+}
+// 檔名消毒：砍路徑分隔/.. 防穿越（% 轉義在組 -o template 時才做，避免重複轉義）
+function sanitizeName(name) {
+  if (!name) return "";
+  return String(name)
+    .replace(/[\\/]+/g, "_")
+    .replace(/\.\./g, "_")
+    .replace(/[\0-\x1f:*?"<>|]+/g, "_")
+    .trim();
+}
+// Origin 白名單：本地 server 沒認證，靠 Origin 擋「惡意網頁 fetch 127.0.0.1 驅動下載」(CSRF)。
+// 放行：無 Origin（curl / 同源 GET / scheme 喚起）、自家擴充、GUI 自己。
+function originAllowed(origin) {
+  if (!origin) return true;
+  return origin.startsWith("chrome-extension://") || origin === `http://127.0.0.1:${PORT}`;
+}
+// /pending GET 專用 token：curl(App) 和惡意網頁 <img> 都沒 Origin，分不出來 →
+// 靠共享秘密區分。啟動時生成寫 ~/.videodl_token(0600)，App 端 curl 讀檔帶上。
+const TOKEN_FILE = path.join(os.homedir(), ".videodl_token");
+let TOKEN = "";
+try {
+  TOKEN = fs.readFileSync(TOKEN_FILE, "utf8").trim();
+} catch {}
+if (!TOKEN) {
+  TOKEN = require("crypto").randomBytes(24).toString("hex");
+  try { fs.writeFileSync(TOKEN_FILE, TOKEN, { mode: 0o600 }); } catch (e) { console.error("token 檔寫入失敗:", e.message); }
 }
 // 確保找得到 yt-dlp / ffmpeg（GUI 啟動時 PATH 可能不全）
 // 只在 macOS 補 Mac 常見路徑；Windows 沿用系統 PATH（yt-dlp/ffmpeg 需在 PATH 中）
@@ -32,16 +61,38 @@ if (process.platform === "darwin") {
 }
 
 function send(res, code, type, body) {
-  res.writeHead(code, { "Content-Type": type, "Access-Control-Allow-Origin": "*" });
+  const origin = res.req?.headers?.origin;
+  const h = { "Content-Type": type };
+  if (origin && originAllowed(origin)) h["Access-Control-Allow-Origin"] = origin;
+  res.writeHead(code, h);
   res.end(body);
 }
 
 function readBody(req) {
   return new Promise((resolve) => {
     let d = "";
-    req.on("data", (c) => (d += c));
+    req.on("data", (c) => {
+      d += c;
+      if (d.length > 1048576) { req.destroy(); resolve({}); } // 1MB 上限，防灌爆
+    });
     req.on("end", () => { try { resolve(JSON.parse(d || "{}")); } catch { resolve({}); } });
   });
+}
+
+// 殺整棵進程樹：yt-dlp 下 HLS 會 spawn ffmpeg，只 kill yt-dlp 會留孤兒 ffmpeg 續跑。
+// spawn 時 detached:true 讓子進程自成 process group → kill(-pid) 連坐整組。
+function spawnDl(args) {
+  return spawn("yt-dlp", args, { env: ENV, detached: process.platform !== "win32" });
+}
+function killTree(p) {
+  if (!p || p.killed) return;
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", String(p.pid), "/T", "/F"]);
+    } else {
+      process.kill(-p.pid, "SIGTERM"); // 負 pid = 整個 process group
+    }
+  } catch { try { p.kill(); } catch {} }
 }
 
 // 解析畫質：yt-dlp -J
@@ -79,10 +130,18 @@ function probe(url, referer) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
 
+  // Origin 閘門：非白名單來源（一般網頁）一律 403，擋 CSRF 驅動下載
+  const origin = req.headers.origin;
+  if (!originAllowed(origin)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("forbidden origin");
+    return;
+  }
+
   // CORS 預檢（popup 從 chrome-extension:// POST JSON 會先送 OPTIONS）
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": origin || "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
       "Access-Control-Max-Age": "86400",
@@ -111,7 +170,7 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/download" && req.method === "GET") {
     const url = u.searchParams.get("url");
     const fmt = u.searchParams.get("format") || "";
-    const name = u.searchParams.get("name") || "";
+    const name = sanitizeName(u.searchParams.get("name") || "");
     const referer = u.searchParams.get("referer") || "";
     if (!url) { send(res, 400, "text/plain", "no url"); return; }
 
@@ -126,10 +185,10 @@ const server = http.createServer(async (req, res) => {
     const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", "chrome"];
     if (fmt) args.push("-f", fmt);
     if (referer) args.push("--referer", referer);
-    args.push("-o", path.join(DLDIR, (name ? name : "%(title)s") + ".%(ext)s"), url);
+    args.push("-o", path.join(DLDIR, (name ? name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), url);
 
     ev({ type: "log", line: "yt-dlp " + args.join(" ") });
-    const p = spawn("yt-dlp", args, { env: ENV });
+    const p = spawnDl(args);
 
     const onLine = (buf) => {
       for (const line of buf.toString().split(/\r?\n/)) {
@@ -144,31 +203,24 @@ const server = http.createServer(async (req, res) => {
     p.on("close", (code) => { ev({ type: code === 0 ? "done" : "error", code }); res.end(); });
     p.on("error", (e) => { ev({ type: "error", line: String(e.message) }); res.end(); });
 
-    req.on("close", () => { try { p.kill(); } catch {} });
+    req.on("close", () => killTree(p)); // 連 ffmpeg 一起殺，不留孤兒
     return;
   }
 
   // 擴充轉發：接 url → spawn yt-dlp 背景下載，狀態進 JOBS 清單供 GUI 輪詢顯示。
   // 立即回 200 不等下載完（popup 按一下就走），但保留進度/錯誤讓 GUI 看得到。
-  // POST（擴充直連）+ GET（videodl:// URL scheme 喚起時用 query 帶參數）都支援。
-  if (u.pathname === "/enqueue" && (req.method === "POST" || req.method === "GET")) {
-    const b = req.method === "POST"
-      ? await readBody(req)
-      : {
-          url: u.searchParams.get("url") || "",
-          referer: u.searchParams.get("referer") || "",
-          name: u.searchParams.get("name") || "",
-          format: u.searchParams.get("format") || "",
-          dir: u.searchParams.get("dir") || "",
-        };
+  // 只收 POST（GET 會被 <img> 之類無 Origin 請求繞過閘門；scheme 喚起走 /pending）。
+  if (u.pathname === "/enqueue" && req.method === "POST") {
+    const b = await readBody(req);
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
+    b.name = sanitizeName(b.name);
 
     // --cookies-from-browser chrome：借瀏覽器 cookie，破 anime1 / CF+cookie 鎖站的 403
     const outDir = expandDir(b.dir);
     const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", "chrome"];
     if (b.format) args.push("-f", b.format);
     if (b.referer) args.push("--referer", b.referer);
-    args.push("-o", path.join(outDir, (b.name ? b.name : "%(title)s") + ".%(ext)s"), b.url);
+    args.push("-o", path.join(outDir, (b.name ? b.name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), b.url);
 
     console.log("[enqueue] yt-dlp " + args.join(" "));
     const job = {
@@ -184,7 +236,7 @@ const server = http.createServer(async (req, res) => {
     if (JOBS.length > 50) JOBS.length = 50;
 
     try {
-      const p = spawn("yt-dlp", args, { env: ENV }); // 不 detached：server 追蹤進度/結果
+      const p = spawnDl(args); // detached=自成 process group（取消時連 ffmpeg 一起殺），server 仍追蹤進度
       PROCS[job.id] = p;
       let lastErr = "";
       const onLine = (buf) => {
@@ -222,13 +274,18 @@ const server = http.createServer(async (req, res) => {
 
   // 待確認：scheme 喚起丟這（POST json 或 GET query）→ GUI 跳規格小窗
   if (u.pathname === "/pending" && (req.method === "POST" || req.method === "GET")) {
+    // GET 無法用 Origin 區分「App 的 curl」和「惡意頁 <img>」→ 驗共享 token
+    if (req.method === "GET" && u.searchParams.get("token") !== TOKEN) {
+      send(res, 403, "text/plain", "bad token");
+      return;
+    }
     const b = req.method === "POST" ? await readBody(req) : {
       url: u.searchParams.get("url") || "",
       referer: u.searchParams.get("referer") || "",
       name: u.searchParams.get("name") || "",
     };
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
-    const item = { id: "p" + (++pendSeq), url: b.url, referer: b.referer || "", name: b.name || "", ts: Date.now() };
+    const item = { id: "p" + (++pendSeq), url: b.url, referer: b.referer || "", name: sanitizeName(b.name || ""), ts: Date.now() };
     PENDING.push(item);
     if (PENDING.length > 20) PENDING.shift();
     console.log("[pending] " + item.url);
@@ -267,7 +324,7 @@ const server = http.createServer(async (req, res) => {
     if (job) {
       job.status = "cancelled";
       const p = PROCS[b.id];
-      if (p) { try { p.kill(); } catch {} delete PROCS[b.id]; }
+      if (p) { killTree(p); delete PROCS[b.id]; }
       JOBS = JOBS.filter((j) => j.id !== b.id);
     }
     send(res, 200, "application/json", JSON.stringify({ ok: true }));

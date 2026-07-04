@@ -3,7 +3,7 @@
   "name": "M3U8 嗅探下載器",
   "version": "1.0.0",
   "description": "嗅探整個瀏覽器的 m3u8 串流，一鍵轉發到本地影片下載器 App。",
-  "permissions": ["webRequest", "storage", "activeTab", "scripting"],
+  "permissions": ["webRequest", "webNavigation", "storage", "activeTab", "scripting", "notifications"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:7654/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [

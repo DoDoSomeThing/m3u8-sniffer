@@ -188,29 +188,30 @@ $("dlBtn").addEventListener("click", () => {
 
   // ✕：取消下載並移除卡片（關閉 EventSource → 後端 yt-dlp 被 kill）
   el.querySelector(".x").addEventListener("click", ()=>{ try{es.close();}catch{}; el.remove(); checkEmpty(); });
+  let ended=false; // 防 EventSource 斷線自動重連 → 重複 spawn yt-dlp
   es.onmessage=(m)=>{
     const d=JSON.parse(m.data);
     if(d.type==="progress"){ bar.style.width=d.pct+"%"; pct.textContent=d.pct.toFixed(1)+"%"; }
     else if(d.type==="log"){ log.textContent=d.line; }
-    else if(d.type==="done"){ bar.style.width="100%"; pct.textContent="完成 ✓"; el.classList.add("done"); es.close(); toast("下載完成"); }
-    else if(d.type==="error"){ pct.textContent="錯誤"; el.classList.add("err"); if(d.line)log.textContent=d.line; es.close(); }
+    else if(d.type==="done"){ ended=true; bar.style.width="100%"; pct.textContent="完成 ✓"; el.classList.add("done"); es.close(); toast("下載完成"); }
+    else if(d.type==="error"){ ended=true; pct.textContent="錯誤"; el.classList.add("err"); if(d.line)log.textContent=d.line; es.close(); }
   };
-  es.onerror=()=>{ es.close(); };
+  es.onerror=()=>{ es.close(); if(!ended){ ended=true; pct.textContent="連線中斷"; el.classList.add("err"); log.textContent="與伺服器連線中斷（下載已中止）"; } };
   toast("開始下載");
 });
 
 // 清除鈕（下載中一律保留，不誤清進行中）
 function checkEmpty(){ const t=$("tasks"); if(!t.querySelector(".task")) t.innerHTML='<div class="empty">尚無下載</div>'; }
 $("clearDone").addEventListener("click", async ()=>{
-  // 只清完成
-  document.querySelectorAll(".task.done").forEach(e=>e.remove());
+  // 先等 server 清完再移 DOM（否則 pollJobs 會把卡片長回來閃一下）
   try{ await fetch("/jobs/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"done"})}); }catch{}
+  document.querySelectorAll(".task.done").forEach(e=>e.remove());
   checkEmpty();
 });
 $("clearAll").addEventListener("click", async ()=>{
   // 清完成 + 失敗；下載中(.task 無 done/err class) 保留
-  document.querySelectorAll(".task.done,.task.err").forEach(e=>e.remove());
   try{ await fetch("/jobs/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"all"})}); }catch{}
+  document.querySelectorAll(".task.done,.task.err").forEach(e=>e.remove());
   checkEmpty();
 });
 
@@ -283,7 +284,10 @@ function openSpec(item){
   }).catch(()=>{ sel.disabled=false; sel.innerHTML='<option value="">最佳畫質（自動）</option>'; });
 }
 function closeSpec(){ $("specMask").classList.remove("show"); curPending=null; }
-async function resolvePending(id){ try{ await fetch("/pending/resolve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})}); }catch{} }
+async function resolvePending(id){
+  try{ await fetch("/pending/resolve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})}); }catch{}
+  shownPending.delete(id); // 回收，Set 不無限長
+}
 
 $("spCancel").addEventListener("click", async ()=>{ const id=curPending&&curPending.id; closeSpec(); if(id) resolvePending(id); });
 $("spOk").addEventListener("click", async ()=>{

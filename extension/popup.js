@@ -19,7 +19,7 @@ async function currentTabId() {
 
 async function render() {
   const tabId = await currentTabId();
-  const { list } = await chrome.runtime.sendMessage({ type: "getResources", tabId });
+  const { list = [] } = (await chrome.runtime.sendMessage({ type: "getResources", tabId })) || {};
   $status.textContent = list.length ? `${list.length} 筆` : "";
   if (!list.length) {
     $list.innerHTML = '<div class="empty">尚未嗅到 m3u8</div>';
@@ -80,6 +80,8 @@ async function enqueue(url, referer) {
   const name = cleanTitle(tab?.title); // 檔名 = 分頁標題(劇名)
   // 一律用 videodl:// 喚起 App：送下載 + 把影片下載器視窗帶到最前
   openScheme(url, ref, name);
+  // popup 馬上會被 App 搶焦點關掉 → 交給 background 盯 20 秒，失敗發系統通知
+  try { chrome.runtime.sendMessage({ type: "watchLaunch" }); } catch {}
   toast("開啟影片下載器…", "#f0c14b");
 }
 

@@ -49,9 +49,8 @@ function mutate(fn) {
   return mutChain;
 }
 
-async function updateBadge(tabId) {
-  const all = await loadAll();
-  const n = (all[tabId] || []).length;
+// badge 數字在 mutate 回呼內算（鏈內快照才準），這裡只負責畫
+async function setBadge(tabId, n) {
   try {
     await chrome.action.setBadgeText({ tabId, text: n > 0 ? String(n) : "" });
     await chrome.action.setBadgeBackgroundColor({ tabId, color: "#e53935" });
@@ -81,7 +80,11 @@ chrome.webRequest.onBeforeRequest.addListener(
     const t = extType(d.url);
     if (!t) return;
     console.log("[m3u8-ext] 抓到", t, ":", d.url.slice(0, 120), "tab", d.tabId);
-    mutate((all) => upsert(all, d.tabId, d.url, { type: t })).then(() => updateBadge(d.tabId));
+    mutate((all) => {
+      const c = upsert(all, d.tabId, d.url, { type: t });
+      setBadge(d.tabId, (all[d.tabId] || []).length);
+      return c;
+    });
   },
   { urls: ["<all_urls>"] }
 );
@@ -114,24 +117,40 @@ chrome.webRequest.onHeadersReceived.addListener(
       return n === "cf-ray" || (n === "server" && /cloudflare/i.test(x.value || ""));
     });
     if (!urlT && ctT) console.log("[m3u8-ext] 偽裝抓到", ctT, ":", d.url.slice(0, 120));
-    mutate((all) => upsert(all, d.tabId, d.url, {
-      type: urlT || ctT,
-      masked: !urlT && ctT ? true : undefined,
-      needsInPage: cf ? true : undefined,
-    })).then(() => updateBadge(d.tabId));
+    mutate((all) => {
+      const c = upsert(all, d.tabId, d.url, {
+        type: urlT || ctT,
+        masked: !urlT && ctT ? true : undefined,
+        needsInPage: cf ? true : undefined,
+      });
+      setBadge(d.tabId, (all[d.tabId] || []).length);
+      return c;
+    });
   },
   { urls: ["<all_urls>"] },
   ["responseHeaders"]
 );
 
 // ── 分頁生命週期：換頁清空、關閉移除 ──
+function clearTab(tabId) {
+  mutate((all) => { if (all[tabId]) { delete all[tabId]; return true; } return false; })
+    .then(() => setBadge(tabId, 0));
+}
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading" && changeInfo.url) {
-    mutate((all) => { if (all[tabId]) { delete all[tabId]; return true; } return false; })
-      .then(() => updateBadge(tabId));
-  }
+  if (changeInfo.status === "loading" && changeInfo.url) clearTab(tabId);
+});
+// SPA(pushState) 換頁不觸發 onUpdated{loading,url} → 舊資源會殘留混進新頁，這裡補清。
+// 只在 pathname 真的變了才清（播放器常 pushState 改 query/時間戳，那不算換片）。
+const TAB_PATH = {}; // tabId → 上次 pathname（worker 休眠會歸零，只影響漏清一次，可接受）
+chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
+  if (d.frameId !== 0) return;
+  let p = "";
+  try { p = new URL(d.url).pathname; } catch {}
+  if (TAB_PATH[d.tabId] !== undefined && TAB_PATH[d.tabId] !== p) clearTab(d.tabId);
+  TAB_PATH[d.tabId] = p;
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
+  delete TAB_PATH[tabId];
   mutate((all) => { if (all[tabId]) { delete all[tabId]; return true; } return false; });
 });
 
@@ -140,30 +159,30 @@ function addManual(all, tabId, url, referer) {
   return upsert(all, tabId, url, { type: extType(url) || "video", referer, manual: true });
 }
 
-// ── 下載轉發：service worker 代打，避開 https 頁 fetch http 的 mixed-content ──
-// 回傳 { ok, netfail }：netfail=true 代表連不到 App（server 沒開），content 據此走 URL scheme 喚起。
-async function enqueueDownload({ url, referer, name }) {
-  try {
-    const res = await fetch(`${SERVER}/enqueue`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, referer: referer || "", name: name || "" }),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) return { ok: false, error: "HTTP " + res.status };
-    const j = await res.json();
-    return { ok: !!j.ok, error: j.error };
-  } catch (e) {
-    return { ok: false, netfail: true, error: "連不到 App" };
-  }
-}
-
 // server 健康檢查（scheme 喚起後輪詢用）
+// （舊 enqueueDownload 直連轉發已刪：下載一律走 videodl:// scheme，才能喚起/聚焦 App）
 async function pingServer() {
   try {
     await fetch(`${SERVER}/jobs`, { signal: AbortSignal.timeout(2000) });
     return true;
   } catch { return false; }
+}
+
+// popup 按下載後自己會關（App 搶焦點），無法顯示成敗 → background 代盯：
+// 20 秒內 server 沒起來就發系統通知（成功不吵）。
+async function watchLaunch() {
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    if (await pingServer()) return;
+  }
+  try {
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "影片下載器",
+      message: "App 沒回應，請確認已安裝「影片下載器」",
+    });
+  } catch (e) { console.error("[watchLaunch]", e); }
 }
 
 // ── popup / content 訊息 ──
@@ -176,23 +195,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ list: all[tabId] || [] });
       } else if (msg.type === "clear") {
         await mutate((all) => { if (all[tabId]) { delete all[tabId]; return true; } return false; });
-        await updateBadge(tabId);
+        await setBadge(tabId, 0);
         sendResponse({ ok: true });
       } else if (msg.type === "addManual") {
-        await mutate((all) => addManual(all, tabId, msg.url, msg.referer));
-        await updateBadge(tabId);
+        await mutate((all) => {
+          const c = addManual(all, tabId, msg.url, msg.referer);
+          setBadge(tabId, (all[tabId] || []).length);
+          return c;
+        });
         sendResponse({ ok: true });
       } else if (msg.type === "addSniffed") {
         // content/inject 內容嗅探 + DOM 掃描來的資源
         const t = extType(msg.url) || msg.mtype || "video";
-        await mutate((all) => upsert(all, tabId, msg.url, { type: t, referer: msg.referer }));
-        await updateBadge(tabId);
+        await mutate((all) => {
+          const c = upsert(all, tabId, msg.url, { type: t, referer: msg.referer });
+          setBadge(tabId, (all[tabId] || []).length);
+          return c;
+        });
         sendResponse({ ok: true });
-      } else if (msg.type === "enqueue") {
-        const r = await enqueueDownload({ url: msg.url, referer: msg.referer, name: msg.name });
-        sendResponse(r);
       } else if (msg.type === "ping") {
         sendResponse({ up: await pingServer() });
+      } else if (msg.type === "watchLaunch") {
+        watchLaunch(); // 不 await：popup 馬上要關，背景自己盯
+        sendResponse({ ok: true });
       } else if (msg.type === "highlight") {
         // 廣播到該分頁所有 frame（含 iframe 播放器）→ sniff.js 框選對應影片
         try { chrome.tabs.sendMessage(tabId, { type: "doHighlight", url: msg.url }); } catch {}

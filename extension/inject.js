@@ -6,6 +6,8 @@
   };
   const isM3u8 = (u) => { try { return /\.m3u8?(\?|$)/i.test(new URL(u, location.href).pathname); } catch { return false; } };
   const isVid = (u) => { try { return /\.(mp4|m4v|webm|mkv|mov|flv)(\?|$)/i.test(new URL(u, location.href).pathname); } catch { return false; } };
+  // 副檔名一律從 pathname 取（raw url 帶 query/fragment 會取錯）
+  const vidExt = (u) => { try { return new URL(u, location.href).pathname.match(/\.(\w+)$/)[1].toLowerCase(); } catch { return "video"; } };
 
   // hook fetch
   const _fetch = window.fetch;
@@ -15,7 +17,7 @@
         try {
           const url = (resp && resp.url) || (typeof a[0] === "string" ? a[0] : (a[0] && a[0].url)) || "";
           if (isM3u8(url)) { post("m3u8", url); return resp; }
-          if (isVid(url)) { post(url.match(/\.(\w+)(\?|$)/)[1].toLowerCase(), url); return resp; }
+          if (isVid(url)) { post(vidExt(url), url); return resp; }
           const ct = (resp.headers && resp.headers.get && (resp.headers.get("content-type") || "")) || "";
           const clen = parseInt((resp.headers && resp.headers.get && resp.headers.get("content-length")) || "0", 10);
           const looks = /mpegurl/i.test(ct) || /\.(m3u8|txt)(\?|$)/i.test(url)
@@ -37,7 +39,7 @@
     this.addEventListener("load", () => {
       try {
         if (isM3u8(u)) post("m3u8", u);
-        else if (isVid(u)) post(u.match(/\.(\w+)(\?|$)/)[1].toLowerCase(), u);
+        else if (isVid(u)) post(vidExt(u), u);
         else if (this.responseText && this.responseText.trim().startsWith("#EXTM3U")) post("m3u8", u);
       } catch {}
     });

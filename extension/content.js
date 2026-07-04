@@ -100,7 +100,7 @@ if (window.top === window) {
       const name = r.name || pageTitleName(); // 檔名優先劇名，空的讓 yt-dlp 抓標題
       openScheme(r.url, referer, name);
       toast("開啟影片下載器…", "#fcd34d");
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 20; i++) { // 20s：涵蓋首次啟 server 較慢的情況
         await sleep(1000);
         if ((await msg({ type: "ping" })).up) { toast("下載中 → 影片下載器"); return; }
       }

@@ -69,8 +69,13 @@ on open location this_URL
 		set AppleScript's text item delimiters to "?"
 		set qs to text item 2 of this_URL
 		set AppleScript's text item delimiters to ""
+		-- /pending GET 要帶共享 token（server 啟動時寫 ~/.videodl_token；擋惡意網頁 <img> 偽造）
+		set tok to ""
+		try
+			set tok to do shell script "cat \"$HOME/.videodl_token\" 2>/dev/null | tr -d '\\n'"
+		end try
 		do shell script "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; " & ¬
-			"/usr/bin/curl -s " & quoted form of (serverURL & "/pending?" & qs) & " >/dev/null 2>&1"
+			"/usr/bin/curl -s " & quoted form of (serverURL & "/pending?" & qs & "&token=" & tok) & " >/dev/null 2>&1"
 	end if
 	openWindow()
 end open location
