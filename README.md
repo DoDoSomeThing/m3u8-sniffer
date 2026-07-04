@@ -1,38 +1,58 @@
 # 影片下載工具組（m3u8-sniffer）
 
-自製、全本地、不外送任何網址。一套搞定 m3u8 / mp4 影音的「找網址 + 下載」。
+自製、全本地、不外送任何網址。一套搞定 m3u8 / mp4 影音的「嗅探 + 下載」。
+**核心（2026-07 改版）：原生 Chrome/Edge 擴充嗅探 → 一鍵喚起本地 App 下載。** 不再依賴油猴。
 
 ## 元件總覽
 
 | 檔案 | 用途 | 平台 |
 | :--- | :--- | :--- |
-| `影片下載器.app` / `.command` | 雙擊啟動 GUI 下載器 | Mac |
-| `影片下載器.bat` | 雙擊啟動 GUI 下載器 | Windows |
-| `server.js` + `gui.html` | GUI 後端 + 介面（被上面啟動器呼叫） | 跨平台 |
-| `m3u8-sniffer.user.js` | 瀏覽器內嗅探 userscript（Tampermonkey） | 跨平台 |
+| `extension/` | **原生 MV3 擴充**：全域嗅探 + 一鍵轉發下載（主力） | Chrome / Edge |
+| `影片下載器.app` / `.command` | 雙擊啟動本地下載器（server + GUI） | Mac |
+| `影片下載器.bat` | 雙擊啟動本地下載器 | Windows |
+| `server.js` + `gui.html` | 下載後端（yt-dlp）+ 進度介面 | 跨平台 |
+| `m3u8-sniffer.user.js` | 舊版油猴 userscript（互補：CF+cookie 鎖站頁內下載） | 跨平台 |
 | `m3u8dl.zsh` | CLI 函式 `vdl` / `seriesdl` | Mac（zsh） |
 | `series_extract.js` | Playwright 無頭抓 m3u8（`seriesdl` 用） | 跨平台（需各機裝 playwright） |
 
+### `extension/` 內部
+`manifest.json`（MV3）· `background.js`（webRequest 全域嗅探 + badge + 下載轉發）· `sniff.js`+`inject.js`（頁面層 hook fetch/XHR 讀 body + DOM 掃描，跨 iframe）· `content.js`（頁內浮動面板）· `popup.js`（工具列面板）
+
 ---
 
-## 三種下載方式
+## 下載方式
 
-### 1. GUI 下載器（主力）
-- Mac：雙擊 `影片下載器.app`（桌面有捷徑）
-- Windows：雙擊 `影片下載器.bat`
-- 介面在 `http://127.0.0.1:7654`：貼網址 → 解析畫質 → 下載，即時進度（✕取消 / 清除完成 / 全部清除）
-- 下到 `~/Downloads`
+### 1. 原生擴充（主力，推薦）
+把整個瀏覽器的網路請求都嗅一遍（含跨域 iframe 播放器），比油猴更全。按下載自動喚起本地 App，全程不用先開任何東西。
 
-### 2. CLI（Mac）
+**安裝（載入未封裝）**
+1. Mac：先建下載器 App（見下方安裝）；`chrome://extensions` → 開「開發者模式」→「載入未封裝項目」→ 選 `extension/` 資料夾。Edge 同一份可載入。
+2. 首次按下載會跳兩個系統詢問（Chrome：開啟「影片下載器」；macOS：允許控制 Chrome/Terminal），勾「一律允許」後就順。
+
+**功能**
+- 全格式嗅探：m3u8 / mp4 / mpd / webm / mkv / mov / m4v / flv…（含 Content-Type 偽裝副檔名補抓）
+- 頁內浮動藥丸鈕（可拖曳、記位置）+ 工具列 popup 兩套面板
+- **hover 清單項 → 頁面上對應影片被框起來**（怕影片多/廣告多下載錯）
+- 手動貼網址、CF 站標註、referer 自動帶
+- 按下載 → `videodl://` 喚起 App（沒開自動啟動）→ 跳**規格小窗**（畫質/檔名/位置）→ 確認才下
+- 檔名自動帶網頁標題（劇名）
+
+### 2. 本地 App / GUI（下載後端，也可單用）
+- Mac：雙擊 `影片下載器.app`；Windows：雙擊 `影片下載器.bat`
+- 介面 `http://127.0.0.1:7654`：貼網址 → 解析畫質 → 下載，即時進度（✕取消 / 清除完成 / 全部清除，下載中不會被清）
+- yt-dlp 借 Chrome cookie（`--cookies-from-browser chrome`）→ 過 anime1 / CF+cookie 站的 403
+- 下到 `~/Downloads`（規格小窗可改位置）
+
+### 3. CLI（Mac）
 ```bash
 vdl <網址>                 # 萬用：支援站直解 / m3u8 直下 / 不支援給提示
 vdl <網址> 檔名 <referer>   # 防盜鏈帶 referer
 seriesdl <ep1網址> 起 迄    # 整劇自動下（JS 動態站，用無頭瀏覽器逐集抓）
 ```
 
-### 3. userscript（瀏覽器內）
-- 先裝 [Tampermonkey](https://www.tampermonkey.net/) → 再點 **[👉 一鍵安裝腳本](https://raw.githubusercontent.com/DoDoSomeThing/m3u8-sniffer/main/m3u8-sniffer.user.js)**（Tampermonkey 會自動跳安裝頁）
-- 藥丸鈕面板：自動嗅到的資源 + 「貼 m3u8 網址」手動欄
+### 4. userscript（舊版，互補）
+原生擴充已取代大部分功能。userscript 保留給**純瀏覽器 session 下載**（CF+cookie 鎖站，外部 yt-dlp 過不了時）。
+- 先裝 [Tampermonkey](https://www.tampermonkey.net/) → 再點 **[👉 一鍵安裝腳本](https://raw.githubusercontent.com/DoDoSomeThing/m3u8-sniffer/main/m3u8-sniffer.user.js)**
 - 下載走瀏覽器 session（cookie 自動帶）→ 能過 cookie 鎖的 CF 站
 
 ---
@@ -96,4 +116,5 @@ pip install curl_cffi          # 過 CF（需先有 Python）
 - AES-128 用 WebCrypto，IV 正確 hex 解析
 
 ## 版本
+- **原生擴充 v1.0.0（2026-07）** — MV3 嗅探 + App 喚起 + 規格小窗 + hover 框選
 - GUI / userscript v1.2.1（2026-06）

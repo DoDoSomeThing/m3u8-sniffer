@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { width: 380px; margin: 0; font: 13px/1.5 -apple-system, "Segoe UI", sans-serif; }
+    header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #8884; }
+    header h1 { font-size: 14px; margin: 0; flex: 1; }
+    #status { font-size: 11px; opacity: .7; }
+    #list { max-height: 380px; overflow-y: auto; padding: 6px 0; }
+    .item { padding: 8px 12px; border-bottom: 1px solid #8882; }
+    .url { word-break: break-all; font-size: 11px; opacity: .85; margin-bottom: 6px; }
+    .row { display: flex; gap: 6px; }
+    button { font: inherit; padding: 4px 10px; border: 1px solid #8886; border-radius: 6px; background: #7773; cursor: pointer; }
+    button:hover { background: #7775; }
+    button.primary { background: #e53935; color: #fff; border-color: #e53935; }
+    .warn { margin-top: 6px; font-size: 11px; color: #b8860b; background: #f0c14b22; border-radius: 6px; padding: 4px 7px; }
+    .empty { padding: 24px 12px; text-align: center; opacity: .6; }
+    footer { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid #8884; }
+    footer button { flex: 1; }
+    .toast { padding: 4px 12px; font-size: 11px; color: #4caf50; min-height: 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>M3U8 嗅探</h1>
+    <span id="status"></span>
+  </header>
+  <div id="list"><div class="empty">尚未嗅到 m3u8</div></div>
+  <div class="toast" id="toast"></div>
+  <footer>
+    <button id="refresh">重新整理</button>
+    <button id="clear">清空</button>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>
