@@ -83,9 +83,21 @@ if (window.top === window) {
       return t.replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim();
     }
 
+    // 偵測自己跑在哪個瀏覽器 → App 開對應瀏覽器的視窗（不然永遠開 Chrome）
+    // Brave 防指紋會把 brands/UA 偽裝成 Chrome → 只能靠它專屬的 navigator.brave 認
+    function browserTag() {
+      if (navigator.brave?.isBrave) return "brave";
+      const brands = (navigator.userAgentData?.brands || []).map((b) => b.brand.toLowerCase()).join(" ");
+      const ua = navigator.userAgent;
+      if (brands.includes("edge") || / Edg\//.test(ua)) return "edge";
+      if (brands.includes("opera") || / OPR\//.test(ua)) return "opera";
+      if (brands.includes("vivaldi") || /Vivaldi/.test(ua)) return "vivaldi";
+      return "chrome";
+    }
+
     // 用隱藏 iframe 觸發 videodl:// 協定，不會把當前頁導走
     function openScheme(url, referer, name) {
-      const qs = new URLSearchParams({ url, referer: referer || "", name: name || "" }).toString();
+      const qs = new URLSearchParams({ url, referer: referer || "", name: name || "", browser: browserTag() }).toString();
       const f = document.createElement("iframe");
       f.style.display = "none";
       f.src = "videodl://download?" + qs;

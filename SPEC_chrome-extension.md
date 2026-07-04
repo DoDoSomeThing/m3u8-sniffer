@@ -31,6 +31,8 @@
 - webRequest 三監聽器並發寫 storage 會互蓋 → `mutate()` promise 鏈序列化。
 - 改 `main.scpt` 會壞 .app 簽章 → 每次 `codesign --force --deep -s -` 重簽；改 Info.plist scheme 後要 `lsregister -f`。
 - 改 `server.js` 後 `.command` 會偵測舊版(戳 /enqueue 回 404)自動 pkill 重啟。
+- **Brave 防指紋把 brands+UA 完全偽裝成 Chrome** → 瀏覽器偵測只能靠 `navigator.brave` 特徵(browserTag() in content/popup)。
+- `/pending` GET 無法用 Origin 區分 App 的 curl 和惡意頁 `<img>`(都沒 Origin) → 用共享 token(`~/.videodl_token`,server 啟動生成 0600,App curl 讀檔帶上)。
 
 ### 沒做 / 未來
 - 不搬油猴的 AES 解密 / ts→mp4 remux / mp4 多線程（yt-dlp 已包辦，冗餘）。

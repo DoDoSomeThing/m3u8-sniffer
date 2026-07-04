@@ -26,31 +26,43 @@ on ensureServer()
 	end repeat
 end ensureServer
 
-on openWindow()
+-- scheme querystring 的 browser= 標籤 → macOS App 名（擴充偵測自己在哪個瀏覽器）
+on browserAppName(btag)
+	if btag is "edge" then return "Microsoft Edge"
+	if btag is "brave" then return "Brave Browser"
+	if btag is "opera" then return "Opera"
+	if btag is "vivaldi" then return "Vivaldi"
+	return "Google Chrome"
+end browserAppName
+
+on openWindow(browserApp)
 	-- 有既有的影片下載器視窗就聚焦它，沒有才開新（避免每次下載都堆一個新視窗）
+	-- Chromium 系（Edge/Brave/Opera/Vivaldi）AppleScript 字典同 Chrome，用 terms from 借字典動態 tell
+	set found to false
 	try
-		tell application "Google Chrome"
-			set found to false
-			repeat with w in windows
-				set ti to 0
-				repeat with t in tabs of w
-					set ti to ti + 1
-					if (URL of t) starts with serverURL then
-						set active tab index of w to ti
-						set index of w to 1
-						set found to true
-						exit repeat
-					end if
+		using terms from application "Google Chrome"
+			tell application browserApp
+				repeat with w in windows
+					set ti to 0
+					repeat with t in tabs of w
+						set ti to ti + 1
+						if (URL of t) starts with serverURL then
+							set active tab index of w to ti
+							set index of w to 1
+							set found to true
+							exit repeat
+						end if
+					end repeat
+					if found then exit repeat
 				end repeat
-				if found then exit repeat
-			end repeat
-			activate
-		end tell
+				activate
+			end tell
+		end using terms from
 		if not found then error "none"
 	on error
 		try
-			-- Chrome app 模式：無網址列/分頁的獨立視窗
-			do shell script "open -na 'Google Chrome' --args --app=" & quoted form of serverURL
+			-- app 模式：無網址列/分頁的獨立視窗
+			do shell script "open -na " & quoted form of browserApp & " --args --app=" & quoted form of serverURL
 		on error
 			do shell script "open " & quoted form of serverURL
 		end try
@@ -64,11 +76,20 @@ end run
 
 on open location this_URL
 	ensureServer()
-	-- videodl://download?url=...&referer=...&name=...（querystring 已由擴充 URL-encode）
+	set btag to ""
+	-- videodl://download?url=...&referer=...&name=...&browser=...（querystring 已由擴充 URL-encode）
 	if this_URL contains "?" then
 		set AppleScript's text item delimiters to "?"
 		set qs to text item 2 of this_URL
 		set AppleScript's text item delimiters to ""
+		-- 解析 browser=（開回觸發下載的那個瀏覽器，不是永遠 Chrome）
+		if qs contains "browser=" then
+			set AppleScript's text item delimiters to "browser="
+			set tmp to text item 2 of qs
+			set AppleScript's text item delimiters to "&"
+			set btag to text item 1 of tmp
+			set AppleScript's text item delimiters to ""
+		end if
 		-- /pending GET 要帶共享 token（server 啟動時寫 ~/.videodl_token；擋惡意網頁 <img> 偽造）
 		set tok to ""
 		try
@@ -77,5 +98,5 @@ on open location this_URL
 		do shell script "export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; " & ¬
 			"/usr/bin/curl -s " & quoted form of (serverURL & "/pending?" & qs & "&token=" & tok) & " >/dev/null 2>&1"
 	end if
-	openWindow()
+	openWindow(browserAppName(btag))
 end open location
