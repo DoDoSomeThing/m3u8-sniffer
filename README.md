@@ -89,7 +89,7 @@ pip install curl_cffi          # 給 yt-dlp --impersonate（過 CF）
 # seriesdl 要 playwright：
 cd 此資料夾 && npm install playwright && npx playwright install chromium
 ```
-`~/.zshrc` 已加：`source ~/Dropbox/AI_agent/600_Project/m3u8-sniffer/m3u8dl.zsh`
+`~/.zshrc` 加一行：`source <此 repo 路徑>/m3u8dl.zsh`
 
 ### Windows
 ```powershell

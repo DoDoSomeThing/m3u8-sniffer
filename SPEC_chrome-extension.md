@@ -141,4 +141,4 @@ content script (content.js)  ← 選配，第二階段
 
 ## 執行入口（下個對話貼這段）
 
-> 讀 `~/Dropbox/AI_agent/600_Project/m3u8-sniffer/SPEC_chrome-extension.md`，依 P1 建 `extension/` 骨架 + 改 `server.js` 加 `/enqueue`。做完給我載入未封裝的測試步驟。
+> 讀本 repo 的 `SPEC_chrome-extension.md`，依 P1 建 `extension/` 骨架 + 改 `server.js` 加 `/enqueue`。做完給我載入未封裝的測試步驟。

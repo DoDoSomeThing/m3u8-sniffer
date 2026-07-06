@@ -8,7 +8,7 @@
 // @downloadURL  https://raw.githubusercontent.com/DoDoSomeThing/m3u8-sniffer/main/m3u8-sniffer.user.js
 // @description  純本地嗅探並下載頁面 m3u8 / mp4 影音。雙嗅探（攔 XHR/fetch + PerformanceObserver），WebCrypto AES-128 解密，並發下載合併，玻璃感介面。無廣告、無導流、不外送任何網址。
 // @description:en Pure-local m3u8/mp4 sniffer & downloader. Dual sniffing, WebCrypto AES-128 decrypt, concurrent merge. No ads, no tracking, nothing sent out.
-// @author       justin
+// @author       DoDoSomeThing
 // @match        *://*/*
 // @connect      *
 // @grant        GM_xmlhttpRequest

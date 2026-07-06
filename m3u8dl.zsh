@@ -77,7 +77,7 @@ m3u8dl() { vdl "$@"; }
 # ══════════════════════════════════════════════════════════════
 seriesdl() {
   local base="$1" start="${2:-1}" end="$3"
-  local SDIR="$HOME/Dropbox/AI_agent/600_Project/m3u8-sniffer"
+  local SDIR="${${(%):-%x}:A:h}"   # 本 zsh 檔所在目錄（自動偵測）
   if [[ -z "$base" || -z "$end" ]]; then
     echo "用法: seriesdl <ep1觀看頁網址> <起集> <迄集>"
     echo "  例: seriesdl 'https://chinaq.fun/tv-cn/201885042/ep1.html' 1 52"

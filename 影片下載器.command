@@ -1,6 +1,6 @@
 #!/bin/zsh
 # 雙擊啟動影片下載器：起本地伺服器（前景，此視窗＝運作指示燈，Ctrl+C 或關視窗即停）
-DIR="$HOME/Dropbox/AI_agent/600_Project/m3u8-sniffer"
+DIR="${0:A:h}"   # 本腳本所在目錄（自動偵測，clone 到哪都能跑）
 URL="http://127.0.0.1:7654"
 
 # 找 node（GUI 啟動時 PATH 可能不全）
