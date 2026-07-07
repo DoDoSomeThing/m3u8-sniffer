@@ -182,8 +182,9 @@ const server = http.createServer(async (req, res) => {
     });
     const ev = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", "chrome"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", "chrome", "--merge-output-format", "mp4"];
     if (fmt) args.push("-f", fmt);
+    else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (referer) args.push("--referer", referer);
     args.push("-o", path.join(DLDIR, (name ? name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), url);
 
@@ -220,8 +221,9 @@ const server = http.createServer(async (req, res) => {
     const COOKIE_BROWSERS = { chrome: "chrome", brave: "brave", edge: "edge", opera: "opera", vivaldi: "vivaldi" };
     const cookieSrc = COOKIE_BROWSERS[b.browser] || "chrome";
     const outDir = expandDir(b.dir);
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc, "--merge-output-format", "mp4"];
     if (b.format) args.push("-f", b.format);
+    else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (b.referer) args.push("--referer", b.referer);
     args.push("-o", path.join(outDir, (b.name ? b.name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), b.url);
 
