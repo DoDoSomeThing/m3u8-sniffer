@@ -76,6 +76,28 @@ function upsert(all, tabId, url, patch) {
   return true;
 }
 
+// ── master↔variant 收斂 ─────────────────────────────
+// 一部 HLS 影片天生會抓到 master 母清單 + 各畫質 variant 子清單（720p/1080p/audio…），
+// 全是 .m3u8 → 若不收斂會一片噴 7-9 條。inject 解析 manifest 帶回 children（子清單網址），
+// 只留 master 一筆，其餘視為它的子項全部藏起來。
+
+// 這個 url 是不是「某個已列 master 的子清單」→ 是就別再列
+function childSuppressed(list, url) {
+  return list.some((r) => Array.isArray(r.children) && r.children.includes(url));
+}
+// master 進來：記下它的 children，並回頭刪掉已經被列出的子清單
+// （variant 的 GET 常比 master 解析完更早到，這裡補刪，解競態）
+function attachMaster(list, url, children) {
+  if (!Array.isArray(children) || !children.length) return false;
+  const master = list.find((r) => r.url === url);
+  if (master) master.children = children;
+  let changed = !!master;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].url !== url && children.includes(list[i].url)) { list.splice(i, 1); changed = true; }
+  }
+  return changed;
+}
+
 // ── 攔截：URL 副檔名（全格式）─────────────────────────
 chrome.webRequest.onBeforeRequest.addListener(
   (d) => {
@@ -84,8 +106,10 @@ chrome.webRequest.onBeforeRequest.addListener(
     if (!t) return;
     console.log("[m3u8-ext] 抓到", t, ":", d.url.slice(0, 120), "tab", d.tabId);
     mutate((all) => {
+      const list = all[d.tabId] || (all[d.tabId] = []);
+      if (childSuppressed(list, d.url)) return false; // 已知 master 的子清單 → 不列
       const c = upsert(all, d.tabId, d.url, { type: t });
-      setBadge(d.tabId, (all[d.tabId] || []).length);
+      setBadge(d.tabId, list.length);
       return c;
     });
   },
@@ -142,12 +166,14 @@ chrome.webRequest.onHeadersReceived.addListener(
     });
     if (!urlT && ctT) console.log("[m3u8-ext] 偽裝抓到", ctT, ":", d.url.slice(0, 120));
     mutate((all) => {
+      const list = all[d.tabId] || (all[d.tabId] = []);
+      if (childSuppressed(list, d.url)) return false; // 已知 master 的子清單 → 不列
       const c = upsert(all, d.tabId, d.url, {
         type: urlT || ctT,
         masked: !urlT && ctT ? true : undefined,
         needsInPage: cf ? true : undefined,
       });
-      setBadge(d.tabId, (all[d.tabId] || []).length);
+      setBadge(d.tabId, list.length);
       return c;
     });
   },
@@ -254,8 +280,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // content/inject 內容嗅探 + DOM 掃描來的資源
         const t = extType(msg.url) || msg.mtype || "video";
         await mutate((all) => {
-          const c = upsert(all, tabId, msg.url, { type: t, referer: msg.referer });
-          setBadge(tabId, (all[tabId] || []).length);
+          const list = all[tabId] || (all[tabId] = []);
+          // 是已知 master 的子清單、且自己不是 master → 不列（inject 可能先送 variant 再送 master，故排除自身）
+          if (!msg.isMaster && childSuppressed(list, msg.url)) return false;
+          let c = upsert(all, tabId, msg.url, { type: t, referer: msg.referer });
+          // master 母清單：記 children + 回頭刪掉已列的子清單
+          if (msg.isMaster && attachMaster(list, msg.url, msg.children)) c = true;
+          setBadge(tabId, list.length);
           return c;
         });
         sendResponse({ ok: true });

@@ -21,7 +21,8 @@ window.addEventListener("message", (e) => {
   const d = e.data;
   if (!d || d.__m3u8sniff !== 1 || !d.url) return;
   if (/^blob:|^data:/i.test(d.url)) return;
-  send({ type: "addSniffed", url: d.url, mtype: d.type, referer: location.href });
+  // isMaster/children：inject 解析 manifest 帶回 → background 用來收斂 master↔variant
+  send({ type: "addSniffed", url: d.url, mtype: d.type, referer: location.href, isMaster: d.isMaster, children: d.children });
 });
 
 // ② 掃 DOM <video>/<source>（有些站直接把網址掛在 src，不發網路請求給 webRequest 抓）
