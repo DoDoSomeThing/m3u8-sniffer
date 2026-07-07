@@ -1,0 +1,6 @@
+# 兩台機(Mac/Windows)靠 Dropbox 同步工作檔，Windows 編輯器存 CRLF 會把整批檔案
+# 弄成假 diff(+N/−N 全行尾雜訊)。統一 LF；只有 .bat 是 Windows 批次檔需 CRLF。
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.icns binary
