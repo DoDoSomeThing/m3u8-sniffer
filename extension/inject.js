@@ -3,9 +3,13 @@
 // 對 m3u8 一律讀 body 解析：master 母清單抽出 variant 子清單網址 → 交 background 收斂
 // （master 吃掉 variant，一部影片只留一個下載點，不再一片噴 7-9 條）。
 (function () {
+  // 網址一律正規化成絕對 URL：協定相對(//host/…)、相對路徑都補全。
+  // 不正規化會出兩種雷：①同一清單 //host 與 https://host 被當兩筆(去重失效)
+  // ②協定相對當 base 解析 children 會丟例外 → 收斂失效。
+  const absUrl = (u) => { try { return new URL(u, location.href).href; } catch { return String(u); } };
   const post = (type, url, extra) => {
     try {
-      if (url) window.postMessage(Object.assign({ __m3u8sniff: 1, type, url: String(url) }, extra || {}), "*");
+      if (url) window.postMessage(Object.assign({ __m3u8sniff: 1, type, url: absUrl(url) }, extra || {}), "*");
     } catch {}
   };
   const isM3u8 = (u) => { try { return /\.m3u8?(\?|$)/i.test(new URL(u, location.href).pathname); } catch { return false; } };
@@ -42,7 +46,7 @@
 
   // 讀到 m3u8 body → 解析 → post（帶 isMaster/children 供 background 收斂）
   function handleM3u8Body(url, text) {
-    const u = url || location.href;
+    const u = absUrl(url || location.href); // 絕對化，當 children 解析 base + 去重 key
     if (!text || !text.trim().startsWith("#EXTM3U")) { post("m3u8", u); return; }
     const { isMaster, children } = parseM3u8(text, u);
     post("m3u8", u, { isMaster, children });
