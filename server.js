@@ -189,22 +189,39 @@ const server = http.createServer(async (req, res) => {
     args.push("-o", path.join(DLDIR, (name ? name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), url);
 
     ev({ type: "log", line: "yt-dlp " + args.join(" ") });
-    const p = spawnDl(args);
 
-    const onLine = (buf) => {
-      for (const line of buf.toString().split(/\r?\n/)) {
-        if (!line.trim()) continue;
-        const m = line.match(/\[download\]\s+([\d.]+)%/);
-        if (m) ev({ type: "progress", pct: parseFloat(m[1]), line });
-        else ev({ type: "log", line });
-      }
+    // cookie 抄取失敗（瀏覽器開著鎖 DB / Chrome 127+ 加密）→ 去掉 --cookies-from-browser 重試一次
+    let curP = null;
+    const runDl = (dlArgs, isRetry) => {
+      const p = spawnDl(dlArgs);
+      curP = p;
+      let cookieFail = false;
+      const onLine = (buf) => {
+        for (const line of buf.toString().split(/\r?\n/)) {
+          if (!line.trim()) continue;
+          if (/could not copy .*cookie|cookies? from .*browser|cookie database/i.test(line)) cookieFail = true;
+          const m = line.match(/\[download\]\s+([\d.]+)%/);
+          if (m) ev({ type: "progress", pct: parseFloat(m[1]), line });
+          else ev({ type: "log", line });
+        }
+      };
+      p.stdout.on("data", onLine);
+      p.stderr.on("data", onLine);
+      p.on("close", (code) => {
+        if (code !== 0 && !isRetry && cookieFail) {
+          const noCookie = dlArgs.filter((a, i) => a !== "--cookies-from-browser" && dlArgs[i - 1] !== "--cookies-from-browser");
+          ev({ type: "log", line: "cookie 讀取失敗，改用無 cookie 重試…" });
+          runDl(noCookie, true);
+          return;
+        }
+        ev({ type: code === 0 ? "done" : "error", code });
+        res.end();
+      });
+      p.on("error", (e) => { ev({ type: "error", line: String(e.message) }); res.end(); });
     };
-    p.stdout.on("data", onLine);
-    p.stderr.on("data", onLine);
-    p.on("close", (code) => { ev({ type: code === 0 ? "done" : "error", code }); res.end(); });
-    p.on("error", (e) => { ev({ type: "error", line: String(e.message) }); res.end(); });
+    runDl(args, false);
 
-    req.on("close", () => killTree(p)); // 連 ffmpeg 一起殺，不留孤兒
+    req.on("close", () => curP && killTree(curP)); // 連 ffmpeg 一起殺，不留孤兒
     return;
   }
 
@@ -241,30 +258,45 @@ const server = http.createServer(async (req, res) => {
     if (JOBS.length > 50) JOBS.length = 50;
 
     try {
-      const p = spawnDl(args); // detached=自成 process group（取消時連 ffmpeg 一起殺），server 仍追蹤進度
-      PROCS[job.id] = p;
-      let lastErr = "";
-      let skipped = false;
-      const onLine = (buf) => {
-        for (const line of buf.toString().split(/\r?\n/)) {
-          if (!line.trim()) continue;
-          const dest = line.match(/Destination:\s*(.+)$/);
-          if (dest) job.name = dest[1].split("/").pop();
-          if (/has already been downloaded/.test(line)) skipped = true; // 同名檔已存在，yt-dlp 沒下就收工
-          const m = line.match(/\[download\]\s+([\d.]+)%/);
-          if (m) { job.pct = parseFloat(m[1]); job.log = line; }
-          else { job.log = line; if (/error|ERROR/.test(line)) lastErr = line; }
-        }
+      // 帶 cookie 跑；若 cookie 抄取失敗（Chrome 開著鎖 DB / Chrome 127+ App-Bound 加密）
+      // → 自動去掉 --cookies-from-browser 重試一次（公開內容照下，只有登入鎖站才真需要 cookie）。
+      const runDl = (dlArgs, isRetry) => {
+        const p = spawnDl(dlArgs); // detached=自成 process group（取消時連 ffmpeg 一起殺）
+        PROCS[job.id] = p;
+        let lastErr = "";
+        let skipped = false;
+        let cookieFail = false;
+        const onLine = (buf) => {
+          for (const line of buf.toString().split(/\r?\n/)) {
+            if (!line.trim()) continue;
+            const dest = line.match(/Destination:\s*(.+)$/);
+            if (dest) job.name = dest[1].split("/").pop();
+            if (/has already been downloaded/.test(line)) skipped = true; // 同名檔已存在，yt-dlp 沒下就收工
+            if (/could not copy .*cookie|cookies? from .*browser|cookie database/i.test(line)) cookieFail = true;
+            const m = line.match(/\[download\]\s+([\d.]+)%/);
+            if (m) { job.pct = parseFloat(m[1]); job.log = line; }
+            else { job.log = line; if (/error|ERROR/.test(line)) lastErr = line; }
+          }
+        };
+        p.stdout.on("data", onLine);
+        p.stderr.on("data", onLine);
+        p.on("close", (code) => {
+          delete PROCS[job.id];
+          if (job.status === "cancelled") return; // 使用者取消，不覆寫
+          if (code === 0) { job.status = "done"; job.pct = 100; job.log = skipped ? "⚠ 同名檔已存在，未重新下載（要重下請先刪/改名舊檔）" : "完成"; return; }
+          if (!isRetry && cookieFail) {
+            // 去掉 --cookies-from-browser <src> 兩個 token 後重試
+            const noCookie = dlArgs.filter((a, i) => a !== "--cookies-from-browser" && dlArgs[i - 1] !== "--cookies-from-browser");
+            job.pct = 0; job.log = "cookie 讀取失敗（瀏覽器開著鎖住），改用無 cookie 重試…";
+            runDl(noCookie, true);
+            return;
+          }
+          job.status = "error";
+          job.log = cookieFail ? "cookie 讀取失敗且無 cookie 也下不了（此站需登入態，請關閉該瀏覽器再試）" : (lastErr || ("yt-dlp 結束碼 " + code));
+        });
+        p.on("error", (e) => { delete PROCS[job.id]; job.status = "error"; job.log = "找不到 yt-dlp：" + e.message; });
       };
-      p.stdout.on("data", onLine);
-      p.stderr.on("data", (buf) => { onLine(buf); });
-      p.on("close", (code) => {
-        delete PROCS[job.id];
-        if (job.status === "cancelled") return; // 使用者取消，不覆寫
-        if (code === 0) { job.status = "done"; job.pct = 100; job.log = skipped ? "⚠ 同名檔已存在，未重新下載（要重下請先刪/改名舊檔）" : "完成"; }
-        else { job.status = "error"; job.log = lastErr || ("yt-dlp 結束碼 " + code); }
-      });
-      p.on("error", (e) => { delete PROCS[job.id]; job.status = "error"; job.log = "找不到 yt-dlp：" + e.message; });
+      runDl(args, false);
       send(res, 200, "application/json", JSON.stringify({ ok: true, id: job.id }));
     } catch (e) {
       job.status = "error"; job.log = String(e.message);

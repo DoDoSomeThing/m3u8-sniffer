@@ -95,14 +95,17 @@ if (window.top === window) {
       return "chrome";
     }
 
-    // 用隱藏 iframe 觸發 videodl:// 協定，不會把當前頁導走
+    // 觸發 videodl:// 協定喚起 App。用 <a> 點擊(top-level + 沿用使用者手勢)。
+    // 不用隱藏 iframe：新版 Chrome 會「靜默」擋掉 iframe 發的外部協定(連「要開啟 App?」框都不跳)。
+    // 外部協定被 Chrome 攔截處理，不會真的把當前頁導走。
     function openScheme(url, referer, name) {
       const qs = new URLSearchParams({ url, referer: referer || "", name: name || "", browser: browserTag() }).toString();
-      const f = document.createElement("iframe");
-      f.style.display = "none";
-      f.src = "videodl://download?" + qs;
-      document.body.appendChild(f);
-      setTimeout(() => f.remove(), 1500);
+      const a = document.createElement("a");
+      a.href = "videodl://download?" + qs;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 1500);
     }
 
     // 下載：一律用 videodl:// 喚起 App → App 會「送下載 + 把影片下載器視窗帶到最前」。

@@ -72,13 +72,15 @@ function browserTag() {
   return "chrome";
 }
 
-// 用隱藏 iframe 觸發 videodl:// 協定
+// 觸發 videodl:// 協定：用 <a> 點擊(沿用使用者手勢)。
+// 隱藏 iframe 會被新版 Chrome 靜默擋掉(連「要開啟 App?」框都不跳)。
 function openScheme(url, referer, name) {
   const qs = new URLSearchParams({ url, referer: referer || "", name: name || "", browser: browserTag() }).toString();
-  const f = document.createElement("iframe");
-  f.style.display = "none";
-  f.src = "videodl://download?" + qs;
-  document.body.appendChild(f);
+  const a = document.createElement("a");
+  a.href = "videodl://download?" + qs;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
 }
 
 function cleanTitle(t) {

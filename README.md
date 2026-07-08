@@ -98,7 +98,13 @@ winget install yt-dlp.yt-dlp
 winget install Gyan.FFmpeg
 pip install curl_cffi          # 過 CF（需先有 Python）
 ```
-裝完重開終端機讓 PATH 生效 → 雙擊 `影片下載器.bat`。
+裝完重開終端機讓 PATH 生效 → 雙擊 `影片下載器.bat`（首次會自動註冊 `videodl://` 協定 + 啟 server）。
+
+**擴充一鍵下載要能用,`videodl://` 協定必須註冊**（Mac 靠 `.app` 的 Info.plist,Windows 靠登錄檔）:
+- `影片下載器.bat` 首次執行會自動跑 `register_videodl_win.bat`（寫 `HKCU\Software\Classes\videodl` → 指向 `videodl_win.js`,免系統管理員）。
+- 沒註冊的話,擴充按「下載/本頁」發出的 `videodl://` Windows 沒程式接 → **靜默無反應**。手動補註冊:雙擊 `register_videodl_win.bat`。
+- `videodl_win.js` = Windows 版協定處理程式:server 沒跑就背景啟 → 排下載 → 開 GUI 確認(等同 Mac 的 `影片下載器.applescript`)。
+
 （`vdl`/`seriesdl` 是 zsh，Windows 要 git-bash/WSL 才能用；GUI 不受影響。）
 
 ### userscript（兩台共用）
