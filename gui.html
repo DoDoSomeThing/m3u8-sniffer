@@ -269,7 +269,7 @@ function openSpec(item){
   $("specMask").classList.add("show");
   // 解析畫質（yt-dlp -J，2~5 秒）
   fetch("/probe",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({url:item.url, referer:item.referer})}).then(r=>r.json()).then(r=>{
+    body:JSON.stringify({url:item.url, referer:item.referer, browser:item.browser||""})}).then(r=>r.json()).then(r=>{
     sel.disabled=false; sel.innerHTML="";
     const best=document.createElement("option"); best.value=""; best.textContent="最佳畫質（自動）"; sel.appendChild(best);
     if(r.ok){

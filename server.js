@@ -95,36 +95,56 @@ function killTree(p) {
   } catch { try { p.kill(); } catch {} }
 }
 
+// --cookies-from-browser 來源對照（probe / enqueue 共用）：借「觸發下載的那個瀏覽器」的 cookie。
+// 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403；TikTok 沒 cookie 則撞 JS challenge。
+const COOKIE_BROWSERS = { chrome: "chrome", brave: "brave", edge: "edge", opera: "opera", vivaldi: "vivaldi" };
+
 // 解析畫質：yt-dlp -J
-function probe(url, referer) {
-  return new Promise((resolve) => {
-    const args = ["-J", "--no-warnings", "--no-playlist", "--impersonate", "chrome"];
-    if (referer) args.push("--referer", referer);
-    args.push(url);
+// 帶 cookie 解析：TikTok 等站沒 cookie 的 -J 會撞 JS challenge（rehydration 失敗）→ 列不出畫質、
+// 走不到下載。download 早就帶 cookie，probe 沒帶是漏洞，這裡補齊。
+// cookie 抄取失敗（瀏覽器開著鎖 DB / Chrome 127+ App-Bound 加密）→ 去掉 cookie 重試一次（公開內容照解）。
+function probe(url, referer, browser) {
+  const cookieSrc = COOKIE_BROWSERS[browser] || "chrome";
+  const parseOut = (out) => {
+    const j = JSON.parse(out);
+    const fmts = (j.formats || [])
+      .filter((f) => f.vcodec && f.vcodec !== "none") // 有畫面的
+      .map((f) => ({
+        id: f.format_id,
+        height: f.height || 0,
+        ext: f.ext,
+        note: f.format_note || "",
+        tbr: f.tbr || 0,
+        size: f.filesize || f.filesize_approx || 0,
+      }))
+      .sort((a, b) => (b.height - a.height) || (b.tbr - a.tbr));
+    return { ok: true, title: j.title || "", formats: fmts };
+  };
+  const run = (args, isRetry) => new Promise((resolve) => {
     let out = "", err = "";
     const p = spawn("yt-dlp", args, { env: ENV });
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (err += d));
     p.on("close", (code) => {
-      if (code !== 0) { resolve({ ok: false, error: (err.trim().split("\n").pop() || "解析失敗") }); return; }
-      try {
-        const j = JSON.parse(out);
-        const fmts = (j.formats || [])
-          .filter((f) => f.vcodec && f.vcodec !== "none") // 有畫面的
-          .map((f) => ({
-            id: f.format_id,
-            height: f.height || 0,
-            ext: f.ext,
-            note: f.format_note || "",
-            tbr: f.tbr || 0,
-            size: f.filesize || f.filesize_approx || 0,
-          }))
-          .sort((a, b) => (b.height - a.height) || (b.tbr - a.tbr));
-        resolve({ ok: true, title: j.title || "", formats: fmts });
-      } catch (e) { resolve({ ok: false, error: "解析輸出異常" }); }
+      if (code === 0) {
+        try { resolve(parseOut(out)); } catch (e) { resolve({ ok: false, error: "解析輸出異常" }); }
+        return;
+      }
+      const cookieFail = /could not copy .*cookie|cookies? from .*browser|cookie database/i.test(err);
+      if (!isRetry && cookieFail) {
+        // 去掉 --cookies-from-browser <src> 兩個 token 後重試（同 enqueue 邏輯）
+        const noCookie = args.filter((a, i) => a !== "--cookies-from-browser" && args[i - 1] !== "--cookies-from-browser");
+        run(noCookie, true).then(resolve);
+        return;
+      }
+      resolve({ ok: false, error: (err.trim().split("\n").pop() || "解析失敗") });
     });
     p.on("error", () => resolve({ ok: false, error: "找不到 yt-dlp" }));
   });
+  const base = ["-J", "--no-warnings", "--no-playlist", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc];
+  if (referer) base.push("--referer", referer);
+  base.push(url);
+  return run(base, false);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -161,7 +181,7 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/probe" && req.method === "POST") {
     const b = await readBody(req);
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
-    const r = await probe(b.url, b.referer);
+    const r = await probe(b.url, b.referer, b.browser);
     send(res, 200, "application/json", JSON.stringify(r));
     return;
   }
@@ -234,8 +254,7 @@ const server = http.createServer(async (req, res) => {
     b.name = sanitizeName(b.name);
 
     // --cookies-from-browser：借「觸發下載的那個瀏覽器」的 cookie（Brave 嗅到的要借 Brave 的，
-    // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403）。破 anime1 / CF+cookie 鎖站。
-    const COOKIE_BROWSERS = { chrome: "chrome", brave: "brave", edge: "edge", opera: "opera", vivaldi: "vivaldi" };
+    // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403）。破 anime1 / CF+cookie 鎖站。（對照表在檔頭 probe 上方）
     const cookieSrc = COOKIE_BROWSERS[b.browser] || "chrome";
     const outDir = expandDir(b.dir);
     const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc, "--merge-output-format", "mp4"];

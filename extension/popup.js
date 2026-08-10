@@ -12,13 +12,31 @@ function toast(msg, color) {
   toast._t = setTimeout(() => ($toast.textContent = ""), 2500);
 }
 
-async function currentTabId() {
+async function currentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab?.id ?? -1;
+  return tab || null;
+}
+
+// 音畫分離站(嗅到的分軌直下=音檔/無聲，正解走觀看頁合軌)：抖音、TikTok
+function splitSite(url) {
+  try { return /(^|\.)(douyin|tiktok)\.com$/i.test(new URL(url).hostname); } catch { return false; }
+}
+// 某些站觀看頁網址 yt-dlp 不認 → 正規化。抖音精選/feed 是 ?modal_id=<id>，要轉 /video/<id>
+function canonicalPageUrl(href) {
+  try {
+    const u = new URL(href);
+    if (/(^|\.)douyin\.com$/i.test(u.hostname)) {
+      const id = u.searchParams.get("modal_id") || (u.pathname.match(/\/video\/(\d+)/) || [])[1];
+      if (id) return `https://www.douyin.com/video/${id}`;
+    }
+  } catch {}
+  return href;
 }
 
 async function render() {
-  const tabId = await currentTabId();
+  const tab = await currentTab();
+  const tabId = tab?.id ?? -1;
+  const split = splitSite(tab?.url);
   const { list = [] } = (await chrome.runtime.sendMessage({ type: "getResources", tabId })) || {};
   $status.textContent = list.length ? `${list.length} 筆` : "";
   if (!list.length) {
@@ -26,6 +44,12 @@ async function render() {
     return;
   }
   $list.innerHTML = "";
+  if (split) {
+    const b = document.createElement("div");
+    b.className = "warn"; b.style.margin = "6px 12px";
+    b.textContent = "⚠ 抖音/TikTok 音畫分離 → 請按下方「本頁下載」；點下列分軌只會拿到音檔或無聲";
+    $list.append(b);
+  }
   list.slice().reverse().forEach((r) => {
     const div = document.createElement("div");
     div.className = "item";
@@ -41,7 +65,11 @@ async function render() {
     const dl = document.createElement("button");
     dl.className = "primary";
     dl.textContent = "下載";
-    dl.onclick = () => enqueue(r.url, r.referer);
+    dl.onclick = () => {
+      // 分軌站直下攔一下：避免手滑點分軌拿到音檔（正解是「本頁下載」）
+      if (split && !confirm("此站音畫分離，直下這條分軌通常只有音檔或無聲。\n建議改按「本頁下載」。\n\n仍要直接下載這條？")) return;
+      enqueue(r.url, r.referer);
+    };
 
     const cp = document.createElement("button");
     cp.textContent = "複製網址";
@@ -99,10 +127,18 @@ async function enqueue(url, referer) {
   toast("開啟影片下載器…", "#f0c14b");
 }
 
+// 「本頁下載」：整頁網址(正規化後)交給 yt-dlp 直解 → 支援站自動合軌(抖音/TikTok 正解)
+document.getElementById("page").onclick = async () => {
+  const tab = await currentTab();
+  if (!tab?.url) { toast("讀不到本頁網址", "#fca5a5"); return; }
+  openScheme(canonicalPageUrl(tab.url), "", cleanTitle(tab.title));
+  try { chrome.runtime.sendMessage({ type: "watchLaunch" }); } catch {}
+  toast("開啟影片下載器…", "#f0c14b");
+};
 document.getElementById("refresh").onclick = render;
 document.getElementById("clear").onclick = async () => {
-  const tabId = await currentTabId();
-  await chrome.runtime.sendMessage({ type: "clear", tabId });
+  const tab = await currentTab();
+  await chrome.runtime.sendMessage({ type: "clear", tabId: tab?.id ?? -1 });
   render();
 };
 

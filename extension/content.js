@@ -130,13 +130,24 @@ if (window.top === window) {
       if (!open) return;
       if (!n) { list.innerHTML = '<div class="empty">尚未嗅到 m3u8</div>'; return; }
       list.innerHTML = "";
+      // 抖音/TikTok 音畫分離：嗅到的分軌直下只會拿到音檔或無聲 → 頂端提示改按「本頁」
+      if (splitSite()) {
+        const b = document.createElement("div");
+        b.className = "warn"; b.style.margin = "0 0 6px";
+        b.textContent = "⚠ 抖音/TikTok 音畫分離 → 請按上方「本頁」下載；點下列分軌只會拿到音檔或無聲";
+        list.append(b);
+      }
       items.slice().reverse().forEach((r) => {
         const it = document.createElement("div"); it.className = "item";
         const tag = (r.type || "video").toUpperCase() + (r.masked ? "·偽裝" : (r.manual ? "·手動" : ""));
         const warn = r.needsInPage ? '<div class="warn">⚠ 此站疑 CF 鎖，外部下載可能失敗，建議用頁內下載鈕</div>' : "";
         it.innerHTML = `<span class="tag">${tag}</span><button class="btn dl">下載</button><button class="btn cp">複製</button><div class="url"></div>${warn}`;
         it.querySelector(".url").textContent = r.url;
-        it.querySelector(".dl").onclick = () => startDownload(r);
+        it.querySelector(".dl").onclick = () => {
+          // 分軌站直下攔一下：避免手滑點分軌拿到音檔（正解是「本頁」）
+          if (splitSite() && !confirm("此站音畫分離，直下這條分軌通常只有音檔或無聲。\n建議關掉改按「本頁」下載。\n\n仍要直接下載這條？")) return;
+          startDownload(r);
+        };
         // hover 清單項 → 在頁面框選對應影片（怕影片多/廣告多下載錯）
         it.addEventListener("mouseenter", () => msg({ type: "highlight", url: r.url }));
         it.addEventListener("mouseleave", () => msg({ type: "highlight", url: null }));
@@ -154,8 +165,25 @@ if (window.top === window) {
     };
     mInput.addEventListener("keydown", (e) => { if (e.key === "Enter") $(".mBtn").click(); });
 
-    // 「本頁」：整頁網址交給 yt-dlp 直解（X/YouTube 等 1800+ 支援站最穩，不用跟切片捉迷藏）
-    $(".pg").onclick = () => startDownload({ url: location.href, referer: "" });
+    // 音畫分離站(嗅到的分軌直下=音檔/無聲，正解走觀看頁合軌)：抖音、TikTok
+    function splitSite() { return /(^|\.)(douyin|tiktok)\.com$/i.test(location.hostname); }
+
+    // 某些站觀看頁網址 yt-dlp 抽取器不認 → 正規化成它吃得下的形式。
+    // 抖音精選是彈窗式 /jingxuan?modal_id=<id>（feed 頁），yt-dlp 只認 /video/<id>；
+    // 不轉的話「本頁」會 Unsupported URL。抖音分軌(音/畫分離)直下只會拿到音檔，故一律走觀看頁合軌。
+    function canonicalPageUrl(href) {
+      try {
+        const u = new URL(href);
+        if (/(^|\.)douyin\.com$/i.test(u.hostname)) {
+          const id = u.searchParams.get("modal_id") || (u.pathname.match(/\/video\/(\d+)/) || [])[1];
+          if (id) return `https://www.douyin.com/video/${id}`;
+        }
+      } catch {}
+      return href;
+    }
+
+    // 「本頁」：整頁網址交給 yt-dlp 直解（X/YouTube/抖音等 1800+ 支援站最穩，不用跟切片捉迷藏）
+    $(".pg").onclick = () => startDownload({ url: canonicalPageUrl(location.href), referer: "" });
 
     // ── 藥丸拖曳 + 位置記憶（8）──
     function setPillPos(left, top) {
