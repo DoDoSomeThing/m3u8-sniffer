@@ -99,6 +99,20 @@ function killTree(p) {
 // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403；TikTok 沒 cookie 則撞 JS challenge。
 const COOKIE_BROWSERS = { chrome: "chrome", brave: "brave", edge: "edge", opera: "opera", vivaldi: "vivaldi" };
 
+// 觀看頁網址正規化（server 端保險，涵蓋擴充舊版 / 手動貼 / scheme 各路徑）：
+// 抖音精選/feed 頁是 /jingxuan?modal_id=<id>（或 /user/..?modal_id=<id>），yt-dlp 只認 /video/<id>，
+// 不轉會 Unsupported URL。只動 douyin.com 頁網址；CDN 分軌媒體 URL（douyinvod 等）不受影響。
+function canonicalUrl(url) {
+  try {
+    const u = new URL(url);
+    if (/(^|\.)douyin\.com$/i.test(u.hostname)) {
+      const id = u.searchParams.get("modal_id") || (u.pathname.match(/\/video\/(\d+)/) || [])[1];
+      if (id) return `https://www.douyin.com/video/${id}`;
+    }
+  } catch {}
+  return url;
+}
+
 // 解析畫質：yt-dlp -J
 // 帶 cookie 解析：TikTok 等站沒 cookie 的 -J 會撞 JS challenge（rehydration 失敗）→ 列不出畫質、
 // 走不到下載。download 早就帶 cookie，probe 沒帶是漏洞，這裡補齊。
@@ -181,14 +195,14 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/probe" && req.method === "POST") {
     const b = await readBody(req);
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
-    const r = await probe(b.url, b.referer, b.browser);
+    const r = await probe(canonicalUrl(b.url), b.referer, b.browser);
     send(res, 200, "application/json", JSON.stringify(r));
     return;
   }
 
   // 下載（SSE 即時進度）
   if (u.pathname === "/download" && req.method === "GET") {
-    const url = u.searchParams.get("url");
+    const url = canonicalUrl(u.searchParams.get("url"));
     const fmt = u.searchParams.get("format") || "";
     const name = sanitizeName(u.searchParams.get("name") || "");
     const referer = u.searchParams.get("referer") || "";
@@ -251,6 +265,7 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/enqueue" && req.method === "POST") {
     const b = await readBody(req);
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
+    b.url = canonicalUrl(b.url);
     b.name = sanitizeName(b.name);
 
     // --cookies-from-browser：借「觸發下載的那個瀏覽器」的 cookie（Brave 嗅到的要借 Brave 的，
@@ -344,7 +359,7 @@ const server = http.createServer(async (req, res) => {
       browser: u.searchParams.get("browser") || "",
     };
     if (!b.url) { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "沒有網址" })); return; }
-    const item = { id: "p" + (++pendSeq), url: b.url, referer: b.referer || "", name: sanitizeName(b.name || ""), browser: b.browser || "", ts: Date.now() };
+    const item = { id: "p" + (++pendSeq), url: canonicalUrl(b.url), referer: b.referer || "", name: sanitizeName(b.name || ""), browser: b.browser || "", ts: Date.now() };
     PENDING.push(item);
     if (PENDING.length > 20) PENDING.shift();
     console.log("[pending] " + item.url);
