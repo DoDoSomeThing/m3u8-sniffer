@@ -58,6 +58,9 @@ if (window.top === window) {
   details.adv[open] > summary { opacity: .95; }
   .advBody { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 8px; }
   .toast { padding: 0 12px 8px; font-size: 11px; min-height: 14px; color: #86efac; }
+  .foot { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid rgba(255,255,255,.1); }
+  .foot .ft { flex: 1; border: none; border-radius: 8px; padding: 6px; font-size: 12px; cursor: pointer; color: #fff; background: rgba(255,255,255,.14); }
+  .foot .ft:hover { background: rgba(255,255,255,.26); }
 </style>
 <div class="pill" title="M3U8 嗅探"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M8 5v14l11-7z"/></svg><span class="badge" hidden>0</span></div>
 <div class="panel">
@@ -65,6 +68,7 @@ if (window.top === window) {
   <div class="manual"><input class="mInput" placeholder="貼 m3u8 網址手動下載（自動漏抓時用）"><button class="mBtn">加入</button><button class="mBtn pg" title="把這個網頁的網址直接交給 yt-dlp 解析下載（X/YouTube 等支援站最穩）">本頁</button></div>
   <div class="toast"></div>
   <div class="list"><div class="empty">尚未嗅到 m3u8</div></div>
+  <div class="foot"><button class="ft rf">重新整理</button><button class="ft cl">清空</button></div>
 </div>`;
 
     const $ = (s) => shadow.querySelector(s);
@@ -265,6 +269,8 @@ if (window.top === window) {
     })();
 
     $(".x").onclick = () => { open = false; panel.classList.remove("open"); };
+    $(".rf").onclick = () => refresh();
+    $(".cl").onclick = async () => { await msg({ type: "clear" }); refresh(); toast("已清空"); };
 
     // 點面板/藥丸以外收起
     document.addEventListener("click", (e) => {
