@@ -60,6 +60,31 @@ if (process.platform === "darwin") {
   ENV.PATH = "/opt/homebrew/bin:/usr/local/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:" + (process.env.PATH || "");
 }
 
+// yt-dlp 版本/新鮮度：TikTok/抖音等反爬快變動站，yt-dlp 舊了會無聲失效（抽不到、只剩音檔）。
+// 啟動時查一次，GUI 開 /health 讀 → 過期就橫幅提醒更新。版本號格式 YYYY.MM.DD(.dev)。
+const YTDLP_STALE_DAYS = 21;
+let YTDLP = { version: "", ageDays: null, stale: false, checked: false };
+function checkYtdlp() {
+  try {
+    const p = spawn("yt-dlp", ["--version"], { env: ENV });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", () => {
+      const v = (out.trim().split(/\s+/)[0] || "");
+      const m = v.match(/^(\d{4})\.(\d{2})\.(\d{2})/);
+      if (m) {
+        const ageDays = Math.floor((Date.now() - Date.UTC(+m[1], +m[2] - 1, +m[3])) / 86400000);
+        YTDLP = { version: v, ageDays, stale: ageDays > YTDLP_STALE_DAYS, checked: true };
+      } else {
+        YTDLP = { version: v, ageDays: null, stale: !!v ? true : true, checked: true }; // 認不出版本 → 當作該更新
+      }
+      if (YTDLP.stale) console.log(`[yt-dlp] 版本 ${YTDLP.version || "?"}（${YTDLP.ageDays ?? "?"} 天前）偏舊，主流站可能失效`);
+    });
+    p.on("error", () => { YTDLP = { version: "", ageDays: null, stale: true, checked: true }; });
+  } catch { YTDLP = { version: "", ageDays: null, stale: true, checked: true }; }
+}
+checkYtdlp();
+
 function send(res, code, type, body) {
   const origin = res.req?.headers?.origin;
   const h = { "Content-Type": type };
@@ -342,6 +367,12 @@ const server = http.createServer(async (req, res) => {
   // GUI 輪詢：擴充下載任務清單
   if (u.pathname === "/jobs" && req.method === "GET") {
     send(res, 200, "application/json", JSON.stringify({ jobs: JOBS }));
+    return;
+  }
+
+  // yt-dlp 新鮮度：GUI 載入時讀，過期橫幅提醒更新
+  if (u.pathname === "/health" && req.method === "GET") {
+    send(res, 200, "application/json", JSON.stringify({ ok: true, ytdlp: YTDLP, staleDays: YTDLP_STALE_DAYS }));
     return;
   }
 

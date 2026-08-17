@@ -43,6 +43,10 @@
   button:disabled{opacity:.5;cursor:not-allowed}
   .hint{font-size:12px;color:var(--dim);margin-top:8px;line-height:1.5}
   .hint b{color:#c4b5fd}
+  .ytwarn{background:#f0c14b1a;border:1px solid #f0c14b66;border-radius:12px;padding:12px 14px;margin-bottom:16px;font-size:13px;line-height:1.6;color:#f0c14b}
+  .ytwarn code{background:rgba(0,0,0,.35);padding:2px 6px;border-radius:6px;color:#fcd34d;font-size:12px;user-select:all}
+  .ytwarn .x{float:right;cursor:pointer;opacity:.6;padding:0 2px}
+  .ytwarn .x:hover{opacity:1}
   #qualityBox{display:none}
   .tasks{display:flex;flex-direction:column;gap:10px}
   .empty{color:var(--dim);font-size:13px;text-align:center;padding:18px}
@@ -74,6 +78,7 @@
 <body>
 <div class="wrap">
   <h1><span class="dot"></span>影片下載器</h1>
+  <div id="ytdlpWarn" class="ytwarn" hidden></div>
 
   <div class="panel">
     <label>影片網址（觀看頁，或 userscript 嗅到的 m3u8 網址）</label>
@@ -301,6 +306,21 @@ $("spOk").addEventListener("click", async ()=>{
 });
 setInterval(pollPending, 1000);
 pollPending();
+
+// yt-dlp 過期提醒：舊了 TikTok/抖音等站會無聲失效（抽不到/只剩音檔）
+async function checkYtdlp(){
+  try{
+    const h = await fetch("/health").then(r=>r.json());
+    const y = h.ytdlp || {};
+    if(!y.stale) return;
+    const age = y.ageDays!=null ? `${y.ageDays} 天前` : "版本異常";
+    const box = $("ytdlpWarn");
+    box.innerHTML = `<span class="x" title="關閉">✕</span>⚠ yt-dlp ${y.version||"?"}（${age}）偏舊，TikTok／抖音等站可能失效（抽不到或只剩音檔）。<br>更新：<code>pip install -U --pre "yt-dlp[default]"</code>　更新後重啟本 App。`;
+    box.hidden = false;
+    box.querySelector(".x").onclick = ()=>{ box.hidden = true; };
+  }catch{}
+}
+checkYtdlp();
 
 // Enter 鍵解析
 $("url").addEventListener("keydown",(e)=>{ if(e.key==="Enter") $("probeBtn").click(); });

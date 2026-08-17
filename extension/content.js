@@ -46,6 +46,17 @@ if (window.top === window) {
   .btn { border: none; border-radius: 6px; padding: 4px 9px; font-size: 12px; cursor: pointer; color: #fff; background: rgba(255,255,255,.14); }
   .btn:hover { background: rgba(255,255,255,.26); }
   .btn.dl { background: linear-gradient(135deg,#6366f1,#8b5cf6); }
+  .pageCta { display: flex; flex-direction: column; gap: 6px; padding: 10px; margin-bottom: 8px;
+    border-radius: 10px; background: rgba(139,92,246,.14); border: 1px solid rgba(139,92,246,.35); }
+  .pageCta .go { border: none; border-radius: 8px; padding: 9px 12px; font-size: 13px; font-weight: 700; cursor: pointer;
+    color: #fff; background: linear-gradient(135deg,#6366f1,#8b5cf6); }
+  .pageCta .go:hover { filter: brightness(1.1); }
+  .pageCta .hint { font-size: 11px; color: #fcd34d; }
+  details.adv { border-radius: 8px; background: rgba(255,255,255,.04); }
+  details.adv > summary { cursor: pointer; padding: 7px 10px; font-size: 12px; opacity: .72; list-style: none; }
+  details.adv > summary::-webkit-details-marker { display: none; }
+  details.adv[open] > summary { opacity: .95; }
+  .advBody { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 8px; }
   .toast { padding: 0 12px 8px; font-size: 11px; min-height: 14px; color: #86efac; }
 </style>
 <div class="pill" title="M3U8 嗅探"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M8 5v14l11-7z"/></svg><span class="badge" hidden>0</span></div>
@@ -130,12 +141,19 @@ if (window.top === window) {
       if (!open) return;
       if (!n) { list.innerHTML = '<div class="empty">尚未嗅到 m3u8</div>'; return; }
       list.innerHTML = "";
-      // 抖音/TikTok 音畫分離：嗅到的分軌直下只會拿到音檔或無聲 → 頂端提示改按「本頁」
-      if (splitSite()) {
-        const b = document.createElement("div");
-        b.className = "warn"; b.style.margin = "0 0 6px";
-        b.textContent = "⚠ 抖音/TikTok 音畫分離 → 請按上方「本頁」下載；點下列分軌只會拿到音檔或無聲";
-        list.append(b);
+      // 主流支援站：把「本頁」設為主鈕、嗅到的分軌收進折疊區，防手滑點到分軌拿音檔/無聲
+      const prefer = preferPage();
+      let target = list; // 分軌 items 的容器（一般站直接放 list；主流站放折疊區內）
+      if (prefer) {
+        const cta = document.createElement("div");
+        cta.className = "pageCta";
+        cta.innerHTML = `<button class="go">⬇ 本頁下載（推薦）</button><div class="hint">此站音畫分離／需合軌，直接下嗅到的分軌常只有音檔或無聲</div>`;
+        cta.querySelector(".go").onclick = downloadPage;
+        list.append(cta);
+        const det = document.createElement("details"); det.className = "adv";
+        det.innerHTML = `<summary>嗅到的分軌 ${n} 條（進階，通常不用）</summary><div class="advBody"></div>`;
+        list.append(det);
+        target = det.querySelector(".advBody");
       }
       items.slice().reverse().forEach((r) => {
         const it = document.createElement("div"); it.className = "item";
@@ -144,15 +162,15 @@ if (window.top === window) {
         it.innerHTML = `<span class="tag">${tag}</span><button class="btn dl">下載</button><button class="btn cp">複製</button><div class="url"></div>${warn}`;
         it.querySelector(".url").textContent = r.url;
         it.querySelector(".dl").onclick = () => {
-          // 分軌站直下攔一下：避免手滑點分軌拿到音檔（正解是「本頁」）
-          if (splitSite() && !confirm("此站音畫分離，直下這條分軌通常只有音檔或無聲。\n建議關掉改按「本頁」下載。\n\n仍要直接下載這條？")) return;
+          // 主流站直下分軌攔一下：避免手滑拿到音檔/無聲/浮水印（正解是「本頁」）
+          if (prefer && !confirm("此站建議用「本頁下載」。\n直接下嗅到的分軌常只有音檔／無聲／浮水印。\n\n仍要直接下載這條？")) return;
           startDownload(r);
         };
         // hover 清單項 → 在頁面框選對應影片（怕影片多/廣告多下載錯）
         it.addEventListener("mouseenter", () => msg({ type: "highlight", url: r.url }));
         it.addEventListener("mouseleave", () => msg({ type: "highlight", url: null }));
         it.querySelector(".cp").onclick = async () => { await navigator.clipboard.writeText(r.url); toast("已複製"); };
-        list.append(it);
+        target.append(it);
       });
     }
 
@@ -165,8 +183,13 @@ if (window.top === window) {
     };
     mInput.addEventListener("keydown", (e) => { if (e.key === "Enter") $(".mBtn").click(); });
 
-    // 音畫分離站(嗅到的分軌直下=音檔/無聲，正解走觀看頁合軌)：抖音、TikTok
-    function splitSite() { return /(^|\.)(douyin|tiktok)\.com$/i.test(location.hostname); }
+    // 主流支援站：yt-dlp 有專屬 extractor，走「本頁」合軌才對；嗅到的分軌直下常是
+    // 音檔／無聲／浮水印／切片。這些站把「本頁」設主鈕、分軌摺疊，防手滑。
+    function preferPage() {
+      const h = location.hostname;
+      return /(^|\.)(douyin|tiktok|youtube|bilibili|instagram|facebook|twitter|x)\.com$/i.test(h)
+          || /(^|\.)(youtu\.be|b23\.tv|fb\.watch)$/i.test(h);
+    }
 
     // 某些站觀看頁網址 yt-dlp 抽取器不認 → 正規化成它吃得下的形式。
     // 抖音精選是彈窗式 /jingxuan?modal_id=<id>（feed 頁），yt-dlp 只認 /video/<id>；
@@ -183,7 +206,8 @@ if (window.top === window) {
     }
 
     // 「本頁」：整頁網址交給 yt-dlp 直解（X/YouTube/抖音等 1800+ 支援站最穩，不用跟切片捉迷藏）
-    $(".pg").onclick = () => startDownload({ url: canonicalPageUrl(location.href), referer: "" });
+    function downloadPage() { startDownload({ url: canonicalPageUrl(location.href), referer: "" }); }
+    $(".pg").onclick = downloadPage;
 
     // ── 藥丸拖曳 + 位置記憶（8）──
     function setPillPos(left, top) {
