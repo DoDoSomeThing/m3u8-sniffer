@@ -21,10 +21,14 @@ let pendSeq = 0;
 // 展開路徑開頭的 ~ / $HOME；resolve 後限制在 home 或 /Volumes 下（防路徑穿越亂寫檔）
 function expandDir(dir) {
   if (!dir) return DLDIR;
-  dir = dir.replace(/^~(?=\/|$)/, os.homedir()).replace(/^\$HOME/, os.homedir());
+  dir = dir.replace(/^~(?=[\/\\]|$)/, os.homedir()).replace(/^\$HOME/, os.homedir()).replace(/^%USERPROFILE%/i, os.homedir());
   const abs = path.resolve(dir);
   const home = os.homedir();
-  if (abs === home || abs.startsWith(home + path.sep) || abs.startsWith("/Volumes" + path.sep)) return abs;
+  if (abs === home || abs.startsWith(home + path.sep)) return abs;
+  // Windows：允許任意絕對路徑（D:\、E:\ 等別的磁碟）；仍靠 path.resolve 收斂 .. 防穿越
+  if (process.platform === "win32" && path.isAbsolute(abs)) return abs;
+  // macOS：外接碟掛在 /Volumes
+  if (process.platform !== "win32" && abs.startsWith("/Volumes" + path.sep)) return abs;
   return DLDIR;
 }
 // 檔名消毒：砍路徑分隔/.. 防穿越（% 轉義在組 -o template 時才做，避免重複轉義）
@@ -63,25 +67,31 @@ if (process.platform === "darwin") {
 // yt-dlp 版本/新鮮度：TikTok/抖音等反爬快變動站，yt-dlp 舊了會無聲失效（抽不到、只剩音檔）。
 // 啟動時查一次，GUI 開 /health 讀 → 過期就橫幅提醒更新。版本號格式 YYYY.MM.DD(.dev)。
 const YTDLP_STALE_DAYS = 21;
+const YTDLP_RECHECK_MS = 5 * 60 * 1000; // /health 進來若距上次查 > 5 分鐘就重查，免升級後還要重啟 server
 let YTDLP = { version: "", ageDays: null, stale: false, checked: false };
+let ytdlpCheckedAt = 0;
 function checkYtdlp() {
-  try {
-    const p = spawn("yt-dlp", ["--version"], { env: ENV });
-    let out = "";
-    p.stdout.on("data", (d) => (out += d));
-    p.on("close", () => {
-      const v = (out.trim().split(/\s+/)[0] || "");
-      const m = v.match(/^(\d{4})\.(\d{2})\.(\d{2})/);
-      if (m) {
-        const ageDays = Math.floor((Date.now() - Date.UTC(+m[1], +m[2] - 1, +m[3])) / 86400000);
-        YTDLP = { version: v, ageDays, stale: ageDays > YTDLP_STALE_DAYS, checked: true };
-      } else {
-        YTDLP = { version: v, ageDays: null, stale: !!v ? true : true, checked: true }; // 認不出版本 → 當作該更新
-      }
-      if (YTDLP.stale) console.log(`[yt-dlp] 版本 ${YTDLP.version || "?"}（${YTDLP.ageDays ?? "?"} 天前）偏舊，主流站可能失效`);
-    });
-    p.on("error", () => { YTDLP = { version: "", ageDays: null, stale: true, checked: true }; });
-  } catch { YTDLP = { version: "", ageDays: null, stale: true, checked: true }; }
+  ytdlpCheckedAt = Date.now();
+  return new Promise((resolve) => {
+    try {
+      const p = spawn("yt-dlp", ["--version"], { env: ENV });
+      let out = "";
+      p.stdout.on("data", (d) => (out += d));
+      p.on("close", () => {
+        const v = (out.trim().split(/\s+/)[0] || "");
+        const m = v.match(/^(\d{4})\.(\d{2})\.(\d{2})/);
+        if (m) {
+          const ageDays = Math.floor((Date.now() - Date.UTC(+m[1], +m[2] - 1, +m[3])) / 86400000);
+          YTDLP = { version: v, ageDays, stale: ageDays > YTDLP_STALE_DAYS, checked: true };
+        } else {
+          YTDLP = { version: v, ageDays: null, stale: true, checked: true }; // 認不出版本 → 當作該更新
+        }
+        if (YTDLP.stale) console.log(`[yt-dlp] 版本 ${YTDLP.version || "?"}（${YTDLP.ageDays ?? "?"} 天前）偏舊，主流站可能失效`);
+        resolve();
+      });
+      p.on("error", () => { YTDLP = { version: "", ageDays: null, stale: true, checked: true }; resolve(); });
+    } catch { YTDLP = { version: "", ageDays: null, stale: true, checked: true }; resolve(); }
+  });
 }
 checkYtdlp();
 
@@ -209,9 +219,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 首頁
+  // 首頁（注入 token → GUI 的 /download EventSource 帶上，過 CSRF 閘門）
   if (u.pathname === "/" || u.pathname === "/index.html") {
-    const html = fs.readFileSync(path.join(__dirname, "gui.html"), "utf8");
+    const html = fs.readFileSync(path.join(__dirname, "gui.html"), "utf8").replace(/__VDL_TOKEN__/g, TOKEN);
     send(res, 200, "text/html; charset=utf-8", html);
     return;
   }
@@ -226,26 +236,30 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 下載（SSE 即時進度）
+  // GET 端點無法靠 Origin 擋 CSRF（惡意頁 <img src>/EventSource 沒 Origin 也放行）→ 驗共享 token。
+  // token 只注入自家 gui.html（同源），惡意跨源頁讀不到（讀 GUI 會撞 Origin 閘門 403）。
   if (u.pathname === "/download" && req.method === "GET") {
+    if (u.searchParams.get("token") !== TOKEN) { send(res, 403, "text/plain", "bad token"); return; }
     const url = canonicalUrl(u.searchParams.get("url"));
     const fmt = u.searchParams.get("format") || "";
     const name = sanitizeName(u.searchParams.get("name") || "");
     const referer = u.searchParams.get("referer") || "";
+    const cookieSrc = COOKIE_BROWSERS[u.searchParams.get("browser")] || "chrome"; // 借對來源瀏覽器 cookie（與 /enqueue 一致）
+    const outDir = expandDir(u.searchParams.get("dir") || ""); // 可指定下載夾（Windows 別的磁碟也行）
     if (!url) { send(res, 400, "text/plain", "no url"); return; }
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       "Connection": "keep-alive",
-      "Access-Control-Allow-Origin": "*",
     });
     const ev = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", "chrome", "--merge-output-format", "mp4"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc, "--merge-output-format", "mp4"];
     if (fmt) args.push("-f", fmt);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (referer) args.push("--referer", referer);
-    args.push("-o", path.join(DLDIR, (name ? name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), url);
+    args.push("-o", path.join(outDir, (name ? name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), url);
 
     ev({ type: "log", line: "yt-dlp " + args.join(" ") });
 
@@ -371,7 +385,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // yt-dlp 新鮮度：GUI 載入時讀，過期橫幅提醒更新
+  // 距上次查 > 5 分鐘就重查再回（升級 yt-dlp 後重載 GUI 即更新，不必重啟 server）
   if (u.pathname === "/health" && req.method === "GET") {
+    if (Date.now() - ytdlpCheckedAt > YTDLP_RECHECK_MS) await checkYtdlp();
     send(res, 200, "application/json", JSON.stringify({ ok: true, ytdlp: YTDLP, staleDays: YTDLP_STALE_DAYS }));
     return;
   }

@@ -100,12 +100,15 @@
       <select id="quality"></select>
     </div>
 
+    <label>下載位置（留空＝~/Downloads；Windows 可填 D:\影片 等別的磁碟）</label>
+    <input id="dir" placeholder="~/Downloads" autocomplete="off">
+
     <div class="btns">
       <button id="probeBtn">解析畫質</button>
       <button id="dlBtn" class="primary">⬇ 下載</button>
     </div>
     <div class="hint">
-      支援站（YouTube/B站/抖音…）貼觀看頁即可。下載到 <b>~/Downloads</b>。<br>
+      支援站（YouTube/B站/抖音…）貼觀看頁即可。下載到 <b>~/Downloads</b>（或上方指定的位置）。<br>
       ⚠️ <b>CF + cookie 鎖的站</b>（skyline / javboys 等，403 解不掉）：外部工具拿不到瀏覽器 cookie，請改用 <b>userscript 面板的「下載」鈕</b>（瀏覽器內 session 才能過 Cloudflare）。
     </div>
   </div>
@@ -142,6 +145,7 @@
 </div>
 
 <script>
+const VDL_TOKEN = "__VDL_TOKEN__"; // server 注入；/download EventSource 帶上過 CSRF 閘門
 const $ = (id) => document.getElementById(id);
 function toast(t){const e=$("toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),1800);}
 
@@ -188,7 +192,7 @@ $("dlBtn").addEventListener("click", () => {
   tasks.prepend(el);
   const bar=el.querySelector("i"), pct=el.querySelector(".pct"), log=el.querySelector(".log");
 
-  const qs=new URLSearchParams({url, format:fmt, name, referer});
+  const qs=new URLSearchParams({url, format:fmt, name, referer, dir:$("dir").value.trim(), token:VDL_TOKEN});
   const es=new EventSource("/download?"+qs.toString());
 
   // ✕：取消下載並移除卡片（關閉 EventSource → 後端 yt-dlp 被 kill）
