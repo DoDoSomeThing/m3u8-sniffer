@@ -36,12 +36,14 @@ on browserAppName(btag)
 end browserAppName
 
 on openWindow(browserApp)
-	-- 有既有的影片下載器視窗就聚焦它，沒有才開新（避免每次下載都堆一個新視窗）
+	-- GUI 分頁已開著就跳過去；沒開就在同一個瀏覽器「開新分頁」(不再開獨立視窗)
 	-- Chromium 系（Edge/Brave/Opera/Vivaldi）AppleScript 字典同 Chrome，用 terms from 借字典動態 tell
 	set found to false
 	try
 		using terms from application "Google Chrome"
 			tell application browserApp
+				activate
+				-- 先找既有 GUI 分頁 → 有就設為作用分頁 + 把它的視窗提到最前
 				repeat with w in windows
 					set ti to 0
 					repeat with t in tabs of w
@@ -55,15 +57,21 @@ on openWindow(browserApp)
 					end repeat
 					if found then exit repeat
 				end repeat
-				activate
+				-- 沒有 → 開新分頁（有視窗就在最前視窗加分頁；沒視窗才開新視窗）
+				if not found then
+					if (count of windows) > 0 then
+						tell front window to make new tab with properties {URL:serverURL}
+						set active tab index of front window to (count of tabs of front window)
+						set index of front window to 1
+					else
+						make new window with properties {URL:serverURL}
+					end if
+				end if
 			end tell
 		end using terms from
-		if not found then error "none"
 	on error
+		-- AppleScript 控制失敗（非 Chromium/權限問題）→ 退回系統預設開分頁
 		try
-			-- app 模式：無網址列/分頁的獨立視窗
-			do shell script "open -na " & quoted form of browserApp & " --args --app=" & quoted form of serverURL
-		on error
 			do shell script "open " & quoted form of serverURL
 		end try
 	end try
