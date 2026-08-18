@@ -44,19 +44,27 @@ async function render() {
   const prefer = preferPage(tab?.url);
   const { list = [] } = (await chrome.runtime.sendMessage({ type: "getResources", tabId })) || {};
   $status.textContent = list.length ? `${list.length} 筆` : "";
+  $list.innerHTML = "";
+
+  // 本頁下載一律置頂：yt-dlp 支援 1800+ 站，先讓它用整頁網址找真片源合軌，
+  // 嗅到的分軌只是 fallback。主流站(音畫分離)分軌摺疊；長尾站分軌直接顯示。
+  const cta = document.createElement("div");
+  cta.className = "pageCta";
+  cta.innerHTML = `<button class="go primary">⬇ 本頁下載（推薦）</button><div class="ctahint">${
+    prefer ? "此站音畫分離／需合軌，直接下嗅到的分軌常只有音檔或無聲"
+           : "先試本頁（yt-dlp 支援 1800+ 站）；下不動再用下方嗅到的分軌"
+  }</div>`;
+  cta.querySelector(".go").onclick = downloadPage;
+  $list.append(cta);
+
   if (!list.length) {
-    $list.innerHTML = '<div class="empty">尚未嗅到 m3u8</div>';
+    const e = document.createElement("div"); e.className = "empty";
+    e.textContent = prefer ? "（此站走本頁下載即可）" : "尚未嗅到 m3u8 分軌";
+    $list.append(e);
     return;
   }
-  $list.innerHTML = "";
-  // 主流支援站：頂部放「本頁下載」主鈕，分軌收進折疊區防手滑
   let target = $list;
   if (prefer) {
-    const cta = document.createElement("div");
-    cta.className = "pageCta";
-    cta.innerHTML = `<button class="go primary">⬇ 本頁下載（推薦）</button><div class="ctahint">此站音畫分離／需合軌，直接下嗅到的分軌常只有音檔或無聲</div>`;
-    cta.querySelector(".go").onclick = downloadPage;
-    $list.append(cta);
     const det = document.createElement("details");
     det.className = "adv";
     det.innerHTML = `<summary>嗅到的分軌 ${list.length} 條（進階，通常不用）</summary>`;

@@ -143,17 +143,30 @@ if (window.top === window) {
       badge.textContent = n; badge.hidden = n === 0;
       pill.classList.toggle("active", n > 0);
       if (!open) return;
-      if (!n) { list.innerHTML = '<div class="empty">尚未嗅到 m3u8</div>'; return; }
       list.innerHTML = "";
-      // 主流支援站：把「本頁」設為主鈕、嗅到的分軌收進折疊區，防手滑點到分軌拿音檔/無聲
-      const prefer = preferPage();
-      let target = list; // 分軌 items 的容器（一般站直接放 list；主流站放折疊區內）
+
+      // 本頁下載一律置頂：yt-dlp 支援 1800+ 站，先讓它用整頁網址找真片源合軌，
+      // 嗅到的分軌只是 fallback（碎片/偽裝/音畫分離常不是真片源）。
+      const prefer = preferPage(); // 主流站(音畫分離)：分軌是雜訊 → 摺疊；長尾站：分軌可能是正解 → 直接顯示
+      const cta = document.createElement("div");
+      cta.className = "pageCta";
+      cta.innerHTML = `<button class="go">⬇ 本頁下載（推薦）</button><div class="hint">${
+        prefer ? "此站音畫分離／需合軌，直接下嗅到的分軌常只有音檔或無聲"
+               : "先試本頁（yt-dlp 支援 1800+ 站）；下不動再用下方嗅到的分軌"
+      }</div>`;
+      cta.querySelector(".go").onclick = downloadPage;
+      list.append(cta);
+
+      let target = list; // 分軌 items 的容器
+      if (!n) {
+        // 沒嗅到分軌：本頁鈕仍在，只提示無分軌
+        const e = document.createElement("div"); e.className = "empty";
+        e.textContent = prefer ? "（此站走本頁下載即可）" : "尚未嗅到 m3u8 分軌";
+        list.append(e);
+        return;
+      }
       if (prefer) {
-        const cta = document.createElement("div");
-        cta.className = "pageCta";
-        cta.innerHTML = `<button class="go">⬇ 本頁下載（推薦）</button><div class="hint">此站音畫分離／需合軌，直接下嗅到的分軌常只有音檔或無聲</div>`;
-        cta.querySelector(".go").onclick = downloadPage;
-        list.append(cta);
+        // 主流站：分軌收進折疊區防手滑
         const det = document.createElement("details"); det.className = "adv";
         det.innerHTML = `<summary>嗅到的分軌 ${n} 條（進階，通常不用）</summary><div class="advBody"></div>`;
         list.append(det);
