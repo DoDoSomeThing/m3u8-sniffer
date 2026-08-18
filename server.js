@@ -63,6 +63,11 @@ const ENV = Object.assign({}, process.env);
 if (process.platform === "darwin") {
   ENV.PATH = "/opt/homebrew/bin:/usr/local/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:" + (process.env.PATH || "");
 }
+// 強制 yt-dlp(Python) 用 UTF-8 輸出 stdout：Windows 預設用系統碼頁(cp950)印中文檔名，
+// server 以 UTF-8 讀 → 進度面板顯示亂碼。設這兩個讓 Python 輸出 UTF-8，顯示才正確。
+// （只影響 stdout 顯示；實際檔名由 -o 參數決定，本來就正確。）
+ENV.PYTHONUTF8 = "1";
+ENV.PYTHONIOENCODING = "utf-8";
 
 // yt-dlp 版本/新鮮度：TikTok/抖音等反爬快變動站，yt-dlp 舊了會無聲失效（抽不到、只剩音檔）。
 // 啟動時查一次，GUI 開 /health 讀 → 過期就橫幅提醒更新。版本號格式 YYYY.MM.DD(.dev)。
