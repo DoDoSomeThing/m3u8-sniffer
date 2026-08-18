@@ -231,6 +231,47 @@ function addManual(all, tabId, url, referer) {
   return upsert(all, tabId, url, { type: extType(url) || "video", referer, manual: true });
 }
 
+// ── cookie 推送：抖音/TikTok 等要 cookie 的站，靠 chrome.cookies API 直接跟 Chrome 要 ──
+// （繞開 yt-dlp 讀 cookie DB 的兩道牆：Chrome 開著鎖 DB、Chrome 127+ App-Bound 加密）
+// 讀到的 cookie 轉 Netscape cookies.txt，POST 給本地 server 寫檔，download 時改用 --cookies <檔>。
+// 只送 127.0.0.1（本機），不外連。
+
+// 註冊網域（取主機名最後兩段：www.douyin.com → douyin.com），當 cookie 檔名 + getAll domain
+function regDomain(host) {
+  const p = String(host || "").toLowerCase().split(".").filter(Boolean);
+  return p.length >= 2 ? p.slice(-2).join(".") : (p[0] || "");
+}
+// chrome.cookies → Netscape cookies.txt 格式
+function toNetscape(cookies) {
+  let out = "# Netscape HTTP Cookie File\n";
+  for (const c of cookies) {
+    const dom = c.domain.startsWith(".") ? c.domain : (c.hostOnly ? c.domain : "." + c.domain);
+    const inclSub = dom.startsWith(".") ? "TRUE" : "FALSE";
+    const expiry = c.session ? 0 : Math.floor(c.expirationDate || 0);
+    out += [dom, inclSub, c.path || "/", c.secure ? "TRUE" : "FALSE", expiry, c.name, c.value].join("\t") + "\n";
+  }
+  return out;
+}
+// 讀某 URL 所屬網域的全部 cookie → 推給 server（回 true/false 表示有沒有推成功）
+async function pushCookies(url) {
+  let host = "";
+  try { host = new URL(url).hostname; } catch { return false; }
+  const domain = regDomain(host);
+  if (!domain) return false;
+  try {
+    const cookies = await chrome.cookies.getAll({ domain });
+    if (!cookies.length) return false;
+    const txt = toNetscape(cookies);
+    const r = await fetch(`${SERVER}/cookies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host: domain, cookies: txt }),
+      signal: AbortSignal.timeout(3000),
+    });
+    return r.ok;
+  } catch (e) { console.warn("[pushCookies]", e.message); return false; }
+}
+
 // server 健康檢查（scheme 喚起後輪詢用）
 // （舊 enqueueDownload 直連轉發已刪：下載一律走 videodl:// scheme，才能喚起/聚焦 App）
 async function pingServer() {
@@ -290,6 +331,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return c;
         });
         sendResponse({ ok: true });
+      } else if (msg.type === "pushCookies") {
+        sendResponse({ ok: await pushCookies(msg.url) });
       } else if (msg.type === "ping") {
         sendResponse({ up: await pingServer() });
       } else if (msg.type === "watchLaunch") {

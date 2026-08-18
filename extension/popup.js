@@ -137,10 +137,22 @@ function cleanTitle(t) {
   return t.replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, " ").trim();
 }
 
+// 抖音/TikTok 等要 cookie 的站：擴充用 chrome.cookies API 讀好推 server（yt-dlp 讀不到 Chrome cookie DB）
+function cookieGated(url) {
+  try {
+    const h = new URL(url).hostname;
+    return /(^|\.)(douyin|tiktok|instagram|facebook|twitter|x)\.com$/i.test(h) || /(^|\.)fb\.watch$/i.test(h);
+  } catch { return false; }
+}
+async function pushCookiesIfGated(url) {
+  if (cookieGated(url)) { try { await chrome.runtime.sendMessage({ type: "pushCookies", url }); } catch {} }
+}
+
 async function enqueue(url, referer) {
   const tab = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
   const ref = referer || tab?.url || "";
   const name = cleanTitle(tab?.title); // 檔名 = 分頁標題(劇名)
+  await pushCookiesIfGated(url); // 先把該站 cookie 推給 server
   // 一律用 videodl:// 喚起 App：送下載 + 把影片下載器視窗帶到最前
   openScheme(url, ref, name);
   // popup 馬上會被 App 搶焦點關掉 → 交給 background 盯 20 秒，失敗發系統通知
@@ -152,7 +164,9 @@ async function enqueue(url, referer) {
 async function downloadPage() {
   const tab = await currentTab();
   if (!tab?.url) { toast("讀不到本頁網址", "#fca5a5"); return; }
-  openScheme(canonicalPageUrl(tab.url), "", cleanTitle(tab.title));
+  const pageUrl = canonicalPageUrl(tab.url);
+  await pushCookiesIfGated(pageUrl); // 先把該站 cookie 推給 server
+  openScheme(pageUrl, "", cleanTitle(tab.title));
   try { chrome.runtime.sendMessage({ type: "watchLaunch" }); } catch {}
   toast("開啟影片下載器…", "#f0c14b");
 }

@@ -125,9 +125,19 @@ if (window.top === window) {
 
     // 下載：一律用 videodl:// 喚起 App → App 會「送下載 + 把影片下載器視窗帶到最前」。
     // 不管 App 本來開沒開都走這條，確保按下載一定跳到影片下載器。
+    // 抖音/TikTok 等要 cookie 的站：yt-dlp 讀不到 Chrome cookie DB（開著鎖／App-Bound 加密）→
+    // 改由擴充用 chrome.cookies API 讀好推給 server，server 下載時用 --cookies 檔。
+    function cookieGated(url) {
+      try {
+        const h = new URL(url).hostname;
+        return /(^|\.)(douyin|tiktok|instagram|facebook|twitter|x)\.com$/i.test(h) || /(^|\.)fb\.watch$/i.test(h);
+      } catch { return false; }
+    }
+
     async function startDownload(r) {
       const referer = r.referer || location.href;
       const name = r.name || pageTitleName(); // 檔名優先劇名，空的讓 yt-dlp 抓標題
+      if (cookieGated(r.url)) await msg({ type: "pushCookies", url: r.url }); // 先把該站 cookie 推給 server
       openScheme(r.url, referer, name);
       toast("開啟影片下載器…", "#fcd34d");
       for (let i = 0; i < 20; i++) { // 20s：涵蓋首次啟 server 較慢的情況
@@ -215,15 +225,42 @@ if (window.top === window) {
       try {
         const u = new URL(href);
         if (/(^|\.)douyin\.com$/i.test(u.hostname)) {
-          const id = u.searchParams.get("modal_id") || (u.pathname.match(/\/video\/(\d+)/) || [])[1];
-          if (id) return `https://www.douyin.com/video/${id}`;
+          // 先看網址；抖音精選 feed 的當前影片 id 常不在網址 → 退而掃 DOM 找當前播放那支
+          let id = u.searchParams.get("modal_id") || (u.pathname.match(/\/video\/(\d+)/) || [])[1];
+          if (!id) id = activeDouyinId();
+          return id ? `https://www.douyin.com/video/${id}` : ""; // 抖音一定要有影片 id，沒有回空 → 上層擋下
         }
       } catch {}
       return href;
     }
 
+    // 抖音精選/feed：網址列沒有 modal_id 時，從 DOM 撈「當前正在播放」那支的影片 id。
+    // 找在畫面中央、正在播的 <video>，往上找最近含 /video/<id> 的連結（分享/作者連結多半帶）。
+    function activeDouyinId() {
+      const vids = [...document.querySelectorAll("video")];
+      // 優先：正在播（未暫停）且面積最大的那支
+      const playing = vids.filter((v) => !v.paused && v.readyState > 0)
+        .sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight))[0] || vids[0];
+      let el = playing;
+      for (let hop = 0; el && hop < 12; hop++, el = el.parentElement) {
+        const a = el.querySelector?.('a[href*="/video/"]');
+        const m = a && a.getAttribute("href").match(/\/video\/(\d+)/);
+        if (m) return m[1];
+      }
+      // 再退：整頁任一 /video/<id> 連結（可能抓錯，但比 Unsupported 好，且有守門提示）
+      const any = document.querySelector('a[href*="/video/"]');
+      return (any && (any.getAttribute("href").match(/\/video\/(\d+)/) || [])[1]) || "";
+    }
+
     // 「本頁」：整頁網址交給 yt-dlp 直解（X/YouTube/抖音等 1800+ 支援站最穩，不用跟切片捉迷藏）
-    function downloadPage() { startDownload({ url: canonicalPageUrl(location.href), referer: "" }); }
+    function downloadPage() {
+      const target = canonicalPageUrl(location.href);
+      if (!target) { // 抖音精選頁沒鎖定影片
+        toast("抖音精選頁沒指定影片：先點進要下的那支（網址會變含 modal_id 或 /video/）再按本頁下載", "#fca5a5");
+        return;
+      }
+      startDownload({ url: target, referer: "" });
+    }
     $(".pg").onclick = downloadPage;
 
     // ── 藥丸拖曳 + 位置記憶（8）──

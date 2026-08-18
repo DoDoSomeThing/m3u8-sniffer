@@ -134,6 +134,32 @@ function killTree(p) {
 // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403；TikTok 沒 cookie 則撞 JS challenge。
 const COOKIE_BROWSERS = { chrome: "chrome", brave: "brave", edge: "edge", opera: "opera", vivaldi: "vivaldi" };
 
+// 擴充推來的 cookies.txt 存這（抖音/TikTok 等要 cookie、但 yt-dlp 讀不到瀏覽器 DB 的站）。
+// 一站一檔（檔名=註冊網域，如 douyin.com.txt），0600。有檔就用 --cookies <檔> 取代 --cookies-from-browser。
+const COOKIE_DIR = path.join(os.homedir(), ".videodl_cookies");
+try { fs.mkdirSync(COOKIE_DIR, { recursive: true, mode: 0o700 }); } catch {}
+function cookieFileFor(url) {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
+  try {
+    for (const f of fs.readdirSync(COOKIE_DIR)) {
+      if (!f.endsWith(".txt")) continue;
+      const dom = f.slice(0, -4);
+      if (host === dom || host.endsWith("." + dom)) {
+        const p = path.join(COOKIE_DIR, f);
+        if (fs.statSync(p).size > 0) return p;
+      }
+    }
+  } catch {}
+  return null;
+}
+// 決定 cookie 參數：該站有擴充推來的 cookie 檔就用檔；否則沿用 --cookies-from-browser <瀏覽器>
+function cookieTokens(url, browser) {
+  const f = cookieFileFor(url);
+  if (f) return ["--cookies", f];
+  return ["--cookies-from-browser", COOKIE_BROWSERS[browser] || "chrome"];
+}
+
 // 觀看頁網址正規化（server 端保險，涵蓋擴充舊版 / 手動貼 / scheme 各路徑）：
 // 抖音精選/feed 頁是 /jingxuan?modal_id=<id>（或 /user/..?modal_id=<id>），yt-dlp 只認 /video/<id>，
 // 不轉會 Unsupported URL。只動 douyin.com 頁網址；CDN 分軌媒體 URL（douyinvod 等）不受影響。
@@ -153,7 +179,6 @@ function canonicalUrl(url) {
 // 走不到下載。download 早就帶 cookie，probe 沒帶是漏洞，這裡補齊。
 // cookie 抄取失敗（瀏覽器開著鎖 DB / Chrome 127+ App-Bound 加密）→ 去掉 cookie 重試一次（公開內容照解）。
 function probe(url, referer, browser) {
-  const cookieSrc = COOKIE_BROWSERS[browser] || "chrome";
   const parseOut = (out) => {
     const j = JSON.parse(out);
     const fmts = (j.formats || [])
@@ -190,7 +215,7 @@ function probe(url, referer, browser) {
     });
     p.on("error", () => resolve({ ok: false, error: "找不到 yt-dlp" }));
   });
-  const base = ["-J", "--no-warnings", "--no-playlist", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc];
+  const base = ["-J", "--no-warnings", "--no-playlist", "--impersonate", "chrome", ...cookieTokens(url, browser)];
   if (referer) base.push("--referer", referer);
   base.push(url);
   return run(base, false);
@@ -244,7 +269,6 @@ const server = http.createServer(async (req, res) => {
     const fmt = u.searchParams.get("format") || "";
     const name = sanitizeName(u.searchParams.get("name") || "");
     const referer = u.searchParams.get("referer") || "";
-    const cookieSrc = COOKIE_BROWSERS[u.searchParams.get("browser")] || "chrome"; // 借對來源瀏覽器 cookie（與 /enqueue 一致）
     const outDir = expandDir(u.searchParams.get("dir") || ""); // 可指定下載夾（Windows 別的磁碟也行）
     if (!url) { send(res, 400, "text/plain", "no url"); return; }
 
@@ -255,7 +279,8 @@ const server = http.createServer(async (req, res) => {
     });
     const ev = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc, "--merge-output-format", "mp4"];
+    // cookie：該站有擴充推來的 cookie 檔就用檔，否則借來源瀏覽器
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(url, u.searchParams.get("browser")), "--merge-output-format", "mp4"];
     if (fmt) args.push("-f", fmt);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (referer) args.push("--referer", referer);
@@ -309,9 +334,8 @@ const server = http.createServer(async (req, res) => {
 
     // --cookies-from-browser：借「觸發下載的那個瀏覽器」的 cookie（Brave 嗅到的要借 Brave 的，
     // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403）。破 anime1 / CF+cookie 鎖站。（對照表在檔頭 probe 上方）
-    const cookieSrc = COOKIE_BROWSERS[b.browser] || "chrome";
     const outDir = expandDir(b.dir);
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", "--cookies-from-browser", cookieSrc, "--merge-output-format", "mp4"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(b.url, b.browser), "--merge-output-format", "mp4"];
     if (b.format) args.push("-f", b.format);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (b.referer) args.push("--referer", b.referer);
@@ -389,6 +413,26 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/health" && req.method === "GET") {
     if (Date.now() - ytdlpCheckedAt > YTDLP_RECHECK_MS) await checkYtdlp();
     send(res, 200, "application/json", JSON.stringify({ ok: true, ytdlp: YTDLP, staleDays: YTDLP_STALE_DAYS }));
+    return;
+  }
+
+  // 擴充推 cookie：抖音/TikTok 等要 cookie 的站，擴充用 chrome.cookies API 讀好轉 Netscape 格式送來，
+  // 寫 ~/.videodl_cookies/<網域>.txt（0600）。download/probe/enqueue 該站就改用 --cookies <檔>。
+  // Origin 閘門已擋非擴充/GUI 來源；cookie 只落本機檔，不外連。
+  if (u.pathname === "/cookies" && req.method === "POST") {
+    const b = await readBody(req);
+    const host = String(b.host || "").toLowerCase();
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host) || host.includes("..")) { // 檔名消毒：只收正常網域
+      send(res, 200, "application/json", JSON.stringify({ ok: false, error: "bad host" })); return;
+    }
+    if (!b.cookies || typeof b.cookies !== "string") { send(res, 200, "application/json", JSON.stringify({ ok: false, error: "no cookies" })); return; }
+    try {
+      fs.writeFileSync(path.join(COOKIE_DIR, host + ".txt"), b.cookies, { mode: 0o600 });
+      console.log("[cookies] 收到 " + host + "（" + (b.cookies.match(/\n/g) || []).length + " 行）");
+      send(res, 200, "application/json", JSON.stringify({ ok: true }));
+    } catch (e) {
+      send(res, 200, "application/json", JSON.stringify({ ok: false, error: String(e.message) }));
+    }
     return;
   }
 
