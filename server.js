@@ -165,6 +165,21 @@ function cookieTokens(url, browser) {
   return ["--cookies-from-browser", COOKIE_BROWSERS[browser] || "chrome"];
 }
 
+// 部分站的 CDN token 驗證要特定 Origin 標頭(光 --referer 不夠會 403)。
+// 巴哈動畫瘋:m3u8 在 bahamut.akamaized.net、來源 ani.gamer.com.tw，缺 Origin → Akamai 403。
+// referer 沒帶時一併補上(讓相對子清單/切片的 hdntl 路徑 token 走得通)。
+function siteHeaders(url, referer) {
+  const h = [];
+  let host = "", refHost = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch {}
+  try { refHost = referer ? new URL(referer).hostname.toLowerCase() : ""; } catch {}
+  if (/(^|\.)bahamut\.akamaized\.net$/.test(host) || /(^|\.)gamer\.com\.tw$/.test(refHost)) {
+    h.push("--add-header", "Origin:https://ani.gamer.com.tw");
+    if (!referer) h.push("--referer", "https://ani.gamer.com.tw/");
+  }
+  return h;
+}
+
 // 觀看頁網址正規化（server 端保險，涵蓋擴充舊版 / 手動貼 / scheme 各路徑）：
 // 抖音精選/feed 頁是 /jingxuan?modal_id=<id>（或 /user/..?modal_id=<id>），yt-dlp 只認 /video/<id>，
 // 不轉會 Unsupported URL。只動 douyin.com 頁網址；CDN 分軌媒體 URL（douyinvod 等）不受影響。
@@ -220,7 +235,7 @@ function probe(url, referer, browser) {
     });
     p.on("error", () => resolve({ ok: false, error: "找不到 yt-dlp" }));
   });
-  const base = ["-J", "--no-warnings", "--no-playlist", "--impersonate", "chrome", ...cookieTokens(url, browser)];
+  const base = ["-J", "--no-warnings", "--no-playlist", "--impersonate", "chrome", ...cookieTokens(url, browser), ...siteHeaders(url, referer)];
   if (referer) base.push("--referer", referer);
   base.push(url);
   return run(base, false);
@@ -285,7 +300,7 @@ const server = http.createServer(async (req, res) => {
     const ev = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
     // cookie：該站有擴充推來的 cookie 檔就用檔，否則借來源瀏覽器
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(url, u.searchParams.get("browser")), "--merge-output-format", "mp4"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(url, u.searchParams.get("browser")), ...siteHeaders(url, referer), "--merge-output-format", "mp4"];
     if (fmt) args.push("-f", fmt);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (referer) args.push("--referer", referer);
@@ -340,7 +355,7 @@ const server = http.createServer(async (req, res) => {
     // --cookies-from-browser：借「觸發下載的那個瀏覽器」的 cookie（Brave 嗅到的要借 Brave 的，
     // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403）。破 anime1 / CF+cookie 鎖站。（對照表在檔頭 probe 上方）
     const outDir = expandDir(b.dir);
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(b.url, b.browser), "--merge-output-format", "mp4"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(b.url, b.browser), ...siteHeaders(b.url, b.referer), "--merge-output-format", "mp4"];
     if (b.format) args.push("-f", b.format);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (b.referer) args.push("--referer", b.referer);
