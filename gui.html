@@ -47,6 +47,10 @@
   .ytwarn code{background:rgba(0,0,0,.35);padding:2px 6px;border-radius:6px;color:#fcd34d;font-size:12px;user-select:all}
   .ytwarn .x{float:right;cursor:pointer;opacity:.6;padding:0 2px}
   .ytwarn .x:hover{opacity:1}
+  .ytwarn .ytup{background:linear-gradient(135deg,var(--acc1),var(--acc2));color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer;margin-top:8px}
+  .ytwarn .ytup:hover{filter:brightness(1.1)}
+  .ytwarn .ytup:disabled{opacity:.6;cursor:default;filter:none}
+  .ytwarn .ytupmsg{font-size:12px;margin-left:8px}
   #qualityBox{display:none}
   .tasks{display:flex;flex-direction:column;gap:10px}
   .empty{color:var(--dim);font-size:13px;text-align:center;padding:18px}
@@ -319,9 +323,27 @@ async function checkYtdlp(){
     if(!y.stale) return;
     const age = y.ageDays!=null ? `${y.ageDays} 天前` : "版本異常";
     const box = $("ytdlpWarn");
-    box.innerHTML = `<span class="x" title="關閉">✕</span>⚠ yt-dlp ${y.version||"?"}（${age}）偏舊，TikTok／抖音等站可能失效（抽不到或只剩音檔）。<br>更新：<code>pip install -U --pre "yt-dlp[default]"</code>　更新後重啟本 App。`;
+    box.innerHTML = `<span class="x" title="關閉">✕</span>⚠ yt-dlp ${y.version||"?"}（${age}）偏舊，TikTok／抖音等站可能失效（抽不到或只剩音檔）。<br><button id="ytUpBtn" class="ytup">⬇ 立即更新</button><span id="ytUpMsg" class="ytupmsg"></span>`;
     box.hidden = false;
     box.querySelector(".x").onclick = ()=>{ box.hidden = true; };
+    $("ytUpBtn").onclick = async ()=>{
+      const btn=$("ytUpBtn"), msg=$("ytUpMsg");
+      btn.disabled=true; btn.textContent="更新中…（約 30 秒，別關視窗）"; msg.textContent="";
+      try{
+        const r = await fetch("/update-ytdlp",{method:"POST"}).then(r=>r.json());
+        const ny = r.ytdlp||{};
+        if(r.ok && !ny.stale){
+          box.innerHTML = `✅ yt-dlp 已更新到 ${ny.version||"最新"}，可以正常下載了。`;
+          setTimeout(()=>{ box.hidden=true; }, 4000);
+        }else{
+          btn.disabled=false; btn.textContent="⬇ 再試一次";
+          msg.textContent=' 更新未完成，可改用終端機：pip install -U --pre "yt-dlp[default]"';
+        }
+      }catch(e){
+        btn.disabled=false; btn.textContent="⬇ 再試一次";
+        msg.textContent=" 更新失敗（server 沒回應）";
+      }
+    };
   }catch{}
 }
 checkYtdlp();

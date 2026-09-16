@@ -100,6 +100,29 @@ function checkYtdlp() {
 }
 checkYtdlp();
 
+// 一鍵更新 yt-dlp:先試 binary 自更(--update-to nightly);pip/套件管理器裝的不能自更 → 改用 pip 裝 nightly。更新後重查版本。
+function updateYtdlp() {
+  const log = [];
+  const run = (cmd, args) => new Promise((res) => {
+    log.push("$ " + cmd + " " + args.join(" ") + "\n");
+    let p;
+    try { p = spawn(cmd, args, { env: ENV }); }
+    catch (e) { log.push("spawn 失敗: " + e.message + "\n"); return res(-1); }
+    p.stdout.on("data", (d) => log.push(d.toString()));
+    p.stderr.on("data", (d) => log.push(d.toString()));
+    p.on("close", (code) => res(code));
+    p.on("error", (e) => { log.push("錯誤: " + e.message + "\n"); res(-1); });
+  });
+  return (async () => {
+    let code = await run("yt-dlp", ["--update-to", "nightly"]);
+    if (code !== 0 || /pip|package manager|external|Use that to update/i.test(log.join(""))) {
+      code = await run("python3", ["-m", "pip", "install", "-U", "--pre", "yt-dlp[default]"]);
+    }
+    await checkYtdlp();
+    return { ok: code === 0, ytdlp: YTDLP, log: log.join("").slice(-3000) };
+  })();
+}
+
 function send(res, code, type, body) {
   const origin = res.req?.headers?.origin;
   const h = { "Content-Type": type };
@@ -433,6 +456,13 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/health" && req.method === "GET") {
     if (Date.now() - ytdlpCheckedAt > YTDLP_RECHECK_MS) await checkYtdlp();
     send(res, 200, "application/json", JSON.stringify({ ok: true, ytdlp: YTDLP, staleDays: YTDLP_STALE_DAYS }));
+    return;
+  }
+
+  // yt-dlp 一鍵更新(GUI 過期橫幅的「立即更新」鈕)
+  if (u.pathname === "/update-ytdlp" && req.method === "POST") {
+    const r = await updateYtdlp();
+    send(res, 200, "application/json", JSON.stringify(r));
     return;
   }
 
