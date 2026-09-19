@@ -183,6 +183,12 @@ function cookieFileFor(url) {
 }
 // 決定 cookie 參數：該站有擴充推來的 cookie 檔就用檔；否則沿用 --cookies-from-browser <瀏覽器>
 function cookieTokens(url, browser) {
+  // YouTube:帶瀏覽器 cookie 反而會被導到壞掉的 client（報 "The page needs to be reloaded" 下不了），
+  // 公開片本來就不需要 cookie；yt-dlp 官方也不建議對 YouTube 用 --cookies-from-browser（易觸發此錯 + 帳號風險）。
+  // → 對 youtube 一律不帶 cookie（會員/年齡限制片本來帶了也照壞，無損失）。
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch {}
+  if (/(^|\.)(youtube\.com|youtu\.be)$/.test(host)) return [];
   const f = cookieFileFor(url);
   if (f) return ["--cookies", f];
   return ["--cookies-from-browser", COOKIE_BROWSERS[browser] || "chrome"];
