@@ -398,6 +398,7 @@ const server = http.createServer(async (req, res) => {
       status: "downloading", // downloading | done | error
       pct: 0,
       log: "啟動中…",
+      tail: ["$ yt-dlp " + args.join(" ")], // 完整輸出(給網頁終端機面板;上限 200 行)
       ts: Date.now(),
     };
     JOBS.unshift(job);
@@ -422,6 +423,12 @@ const server = http.createServer(async (req, res) => {
             const m = line.match(/\[download\]\s+([\d.]+)%/);
             if (m) { job.pct = parseFloat(m[1]); job.log = line; }
             else { job.log = line; if (/error|ERROR/.test(line)) lastErr = line; }
+            // 進度行原地覆蓋上一行(不然 tail 被上百個 % 洗版);其他行照推
+            const t = job.tail || (job.tail = []);
+            const isProg = /\[download\]\s+[\d.]+%/.test(line);
+            if (isProg && t.length && /\[download\]\s+[\d.]+%/.test(t[t.length - 1])) t[t.length - 1] = line;
+            else t.push(line);
+            if (t.length > 200) t.shift();
           }
         };
         p.stdout.on("data", onLine);

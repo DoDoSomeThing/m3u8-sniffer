@@ -17,7 +17,14 @@
     background:radial-gradient(1200px 600px at 70% -10%,#241f3a,transparent),linear-gradient(160deg,var(--bg1),var(--bg2));
     padding:28px 18px;
   }
-  .wrap{max-width:760px;margin:0 auto}
+  .wrap{max-width:1180px;margin:0 auto}
+  .cols{display:flex;gap:18px;align-items:stretch}  /* stretch = 兩欄等高 */
+  .col-left{flex:1 1 56%;min-width:0}
+  .col-right{flex:1 1 44%;min-width:0;display:flex;flex-direction:column}
+  .console-panel{margin-bottom:0;display:flex;flex-direction:column;flex:1;min-height:0}
+  /* 桌面:黑色 console 填滿右欄(對齊左欄高度);權重比 base .console 高才蓋得掉 max-height:300 */
+  @media(min-width:861px){ .col-right .console{flex:1 1 auto;min-height:0;max-height:none} }
+  @media(max-width:860px){ .cols{flex-direction:column} .col-right{display:block} .console-panel{display:block} }
   h1{font-size:20px;margin:0 0 18px;display:flex;align-items:center;gap:10px}
   h1 .dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--acc1),var(--acc2));box-shadow:0 0 12px var(--acc2)}
   .panel{
@@ -66,6 +73,10 @@
   .task.err .log{color:#fca5a5;white-space:normal}
   .task .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;padding:0 2px;border:none;background:none}
   .task .x:hover{color:#fff}
+  .task .hint2{margin-top:8px;font-size:12px;background:#ef44441a;border:1px solid #ef444455;border-radius:8px;padding:8px 10px;color:#fca5a5;line-height:1.5}
+  .task .hint2 b{color:#fecaca}
+  .console{margin:0;max-height:300px;min-height:120px;overflow:auto;background:#0b0b12;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cbd5e1;white-space:pre-wrap;word-break:break-all}
+  .console:empty::before{content:"（待命中…下載開始後這裡會即時顯示 yt-dlp 的輸出）";color:var(--dim)}
   .toast{position:fixed;bottom:18px;right:18px;background:#000;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
   .toast.show{opacity:.92}
   /* 下載規格小窗 */
@@ -84,6 +95,8 @@
   <h1><span class="dot"></span>影片下載器</h1>
   <div id="ytdlpWarn" class="ytwarn" hidden></div>
 
+  <div class="cols">
+  <div class="col-left">
   <div class="panel">
     <label>影片網址（觀看頁，或 userscript 嗅到的 m3u8 網址）</label>
     <input id="url" placeholder="https://… 或 …index.m3u8" autocomplete="off">
@@ -127,6 +140,18 @@
     </div>
     <div class="tasks" id="tasks"><div class="empty">尚無下載</div></div>
   </div>
+  </div><!-- /col-left -->
+
+  <div class="col-right">
+  <div class="panel console-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <label style="margin:0">終端機（即時輸出）</label>
+      <button id="conClear" style="padding:5px 12px;font-size:12px">清空</button>
+    </div>
+    <pre id="console" class="console"></pre>
+  </div>
+  </div><!-- /col-right -->
+  </div><!-- /cols -->
 </div>
 <div class="toast" id="toast"></div>
 
@@ -179,6 +204,64 @@ $("probeBtn").addEventListener("click", async () => {
 
 // 下載
 let taskId=0;
+// ── 全域即時終端機:所有下載的 yt-dlp 輸出往這裡跑(% 原地跳動)──
+let CON=[], conLastProg=false;
+function consoleWrite(line){
+  if(line==null || line==="") return;
+  const isProg=/\[download\]\s+[\d.]+%/.test(line);
+  if(isProg && conLastProg && CON.length) CON[CON.length-1]=line; // 進度原地覆蓋
+  else CON.push(line);
+  conLastProg=isProg;
+  if(CON.length>500) CON.splice(0,CON.length-500);
+  const c=document.getElementById("console"); if(!c) return;
+  const atBottom=c.scrollTop+c.clientHeight>=c.scrollHeight-24;
+  c.textContent=CON.join("\n");
+  if(atBottom) c.scrollTop=c.scrollHeight; // 貼底才自動捲(使用者往上看時不打擾)
+}
+document.getElementById("conClear")?.addEventListener("click",()=>{ CON=[]; conLastProg=false; const c=document.getElementById("console"); if(c) c.textContent=""; });
+// 錯誤訊息 → 白話原因+解法
+function errorHint(txt){
+  const t=txt||"";
+  const M=[
+    [/Unsupported URL/i,"此站 yt-dlp 不支援","改點下方嗅到的 m3u8 分軌下載，別用本頁"],
+    [/The page needs to be reloaded/i,"YouTube cookie 造成的錯","已修:更新後重啟 App(youtube 不帶 cookie)"],
+    [/Requested format is not available/i,"選的畫質對不上","畫質改「最佳(自動)」再試"],
+    [/could not copy.*cookie|cookies? from .*browser|cookie database/i,"瀏覽器把 cookie 資料庫鎖住","關掉該瀏覽器所有視窗再下一次"],
+    [/Sign in to confirm|age-restrict|inappropriate/i,"需登入/年齡限制","此片要帳號才能下，外部工具較難"],
+    [/Private video|members-only|available to .*member|join this channel/i,"會員/私人影片","沒權限，需訂閱或影片擁有者開放"],
+    [/Video unavailable|has been removed|no longer available|not available in your/i,"影片不存在/已下架/地區限制","確認網址，或換管道"],
+    [/HTTP Error 403|Access Denied|Forbidden/i,"被伺服器擋(防盜連/權限)","多半缺 Referer/Origin 或 token 過期;巴哈類要邊看邊嗅的即時網址"],
+    [/HTTP Error 404/i,"網址失效(404)","影片或連結不存在，重抓網址"],
+    [/HTTP Error 429|Too Many Requests/i,"被限流(太頻繁)","等一下再試，或減少同時下載"],
+    [/Unable to.*extract|rehydration/i,"yt-dlp 抽取器過期","按上方「立即更新」更新 yt-dlp 再試"],
+  ];
+  for(const [re,cause,fix] of M) if(re.test(t)) return {cause,fix};
+  if(/error/i.test(t)) return {cause:"未知錯誤",fix:"看下方終端機最後幾行找線索"};
+  return null;
+}
+// 把整份輸出畫進卡片的終端機 + 錯誤原因框
+function paintTermHint(el, tail, status){
+  const lines=Array.isArray(tail)?tail:[];
+  const term=el.querySelector(".term");
+  if(term){
+    const txt=lines.join("\n");
+    if(term.textContent!==txt){
+      const atBottom=term.scrollTop+term.clientHeight>=term.scrollHeight-24;
+      term.textContent=txt;
+      const sum=el.querySelector(".term-wrap>summary");
+      if(sum) sum.textContent="終端機（"+lines.length+" 行）";
+      if(atBottom) term.scrollTop=term.scrollHeight;
+    }
+  }
+  const hb=el.querySelector(".hint2");
+  if(hb){
+    if(status==="error"){
+      const h=errorHint(lines.join("\n"));
+      if(h){ hb.innerHTML="<b>可能原因：</b>"+h.cause+"　<b>解法：</b>"+h.fix; hb.hidden=false; }
+      else hb.hidden=true;
+    } else hb.hidden=true;
+  }
+}
 $("dlBtn").addEventListener("click", () => {
   const url=$("url").value.trim();
   if(!url){ toast("先貼網址"); return; }
@@ -192,9 +275,11 @@ $("dlBtn").addEventListener("click", () => {
   const el=document.createElement("div"); el.className="task"; el.id=id;
   el.innerHTML=`<div class="top"><span class="nm">${(name||url).replace(/</g,"&lt;")}</span>
     <span style="display:flex;align-items:center;gap:8px"><span class="pct">啟動中…</span><button class="x" title="取消/移除">✕</button></span></div>
-    <div class="bar"><i></i></div><div class="log"></div>`;
+    <div class="bar"><i></i></div><div class="log"></div>
+    <div class="hint2" hidden></div>`;
   tasks.prepend(el);
   const bar=el.querySelector("i"), pct=el.querySelector(".pct"), log=el.querySelector(".log");
+  const term=[];
 
   const qs=new URLSearchParams({url, format:fmt, name, referer, dir:$("dir").value.trim(), token:VDL_TOKEN});
   const es=new EventSource("/download?"+qs.toString());
@@ -204,10 +289,10 @@ $("dlBtn").addEventListener("click", () => {
   let ended=false; // 防 EventSource 斷線自動重連 → 重複 spawn yt-dlp
   es.onmessage=(m)=>{
     const d=JSON.parse(m.data);
-    if(d.type==="progress"){ bar.style.width=d.pct+"%"; pct.textContent=d.pct.toFixed(1)+"%"; }
-    else if(d.type==="log"){ log.textContent=d.line; }
-    else if(d.type==="done"){ ended=true; bar.style.width="100%"; pct.textContent="完成 ✓"; el.classList.add("done"); es.close(); toast("下載完成"); }
-    else if(d.type==="error"){ ended=true; pct.textContent="錯誤"; el.classList.add("err"); if(d.line)log.textContent=d.line; es.close(); }
+    if(d.type==="progress"){ bar.style.width=d.pct+"%"; pct.textContent=d.pct.toFixed(1)+"%"; if(d.line){term.push(d.line); if(term.length>200)term.shift(); consoleWrite(d.line);} }
+    else if(d.type==="log"){ log.textContent=d.line; term.push(d.line); if(term.length>200)term.shift(); consoleWrite(d.line); }
+    else if(d.type==="done"){ ended=true; bar.style.width="100%"; pct.textContent="完成 ✓"; el.classList.add("done"); consoleWrite("[完成] "+(name||url)); paintTermHint(el,term,"done"); es.close(); toast("下載完成"); }
+    else if(d.type==="error"){ ended=true; pct.textContent="錯誤"; el.classList.add("err"); if(d.line){log.textContent=d.line; term.push(d.line); consoleWrite(d.line);} paintTermHint(el,term,"error"); es.close(); }
   };
   es.onerror=()=>{ es.close(); if(!ended){ ended=true; pct.textContent="連線中斷"; el.classList.add("err"); log.textContent="與伺服器連線中斷（下載已中止）"; } };
   toast("開始下載");
@@ -240,7 +325,8 @@ async function pollJobs(){
       el=document.createElement("div"); el.className="task"; el.id=j.id;
       el.innerHTML=`<div class="top"><span class="nm"></span>
         <span style="display:flex;align-items:center;gap:8px"><span class="pct"></span><span style="font-size:10px;color:var(--acc2);border:1px solid var(--acc2);border-radius:5px;padding:0 4px">擴充</span><button class="x" title="移除">✕</button></span></div>
-        <div class="bar"><i></i></div><div class="log"></div>`;
+        <div class="bar"><i></i></div><div class="log"></div>
+        <div class="hint2" hidden></div>`;
       tasks.prepend(el);
       el.querySelector(".x").addEventListener("click", async ()=>{
         // 取消/移除擴充任務：通知 server kill + 從清單移除（否則輪詢又長回來）
@@ -251,6 +337,10 @@ async function pollJobs(){
     el.querySelector(".nm").textContent=j.name;
     el.querySelector("i").style.width=(j.status==="done"?100:j.pct)+"%";
     el.querySelector(".log").textContent=j.log||"";
+    // 新出現的 tail 行推進全域終端機(擴充下載也即時看得到在跑什麼)
+    const printed=+(el.dataset.printed||0), tail=j.tail||[];
+    if(tail.length>printed){ for(let i=printed;i<tail.length;i++) consoleWrite(tail[i]); el.dataset.printed=tail.length; }
+    paintTermHint(el, j.tail, j.status);
     const pct=el.querySelector(".pct");
     el.classList.remove("done","err");
     if(j.status==="done"){ pct.textContent="完成 ✓"; el.classList.add("done"); }
