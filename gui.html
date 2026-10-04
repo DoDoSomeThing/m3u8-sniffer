@@ -23,7 +23,7 @@
   .col-right{flex:1 1 44%;min-width:0;display:flex;flex-direction:column}
   .console-panel{margin-bottom:0;display:flex;flex-direction:column;flex:1;min-height:0}
   /* 桌面:黑色 console 填滿右欄(對齊左欄高度);權重比 base .console 高才蓋得掉 max-height:300 */
-  @media(min-width:861px){ .col-right .console{flex:1 1 auto;min-height:0;max-height:none} }
+  @media(min-width:861px){ .col-right .console{flex:1 1 0;min-height:0;max-height:none} }  /* basis:0 → 內容不撐高欄位,固定高度內部捲動 */
   @media(max-width:860px){ .cols{flex-direction:column} .col-right{display:block} .console-panel{display:block} }
   h1{font-size:20px;margin:0 0 18px;display:flex;align-items:center;gap:10px}
   h1 .dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--acc1),var(--acc2));box-shadow:0 0 12px var(--acc2)}
@@ -58,6 +58,9 @@
   .ytwarn .ytup:hover{filter:brightness(1.1)}
   .ytwarn .ytup:disabled{opacity:.6;cursor:default;filter:none}
   .ytwarn .ytupmsg{font-size:12px;margin-left:8px}
+  .subpick{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+  .subpick .subopt{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:7px;padding:3px 9px;cursor:pointer}
+  .subpick .subopt input{margin:0}
   #qualityBox{display:none}
   .tasks{display:flex;flex-direction:column;gap:10px}
   .empty{color:var(--dim);font-size:13px;text-align:center;padding:18px}
@@ -117,6 +120,11 @@
       <select id="quality"></select>
     </div>
 
+    <div id="subBox" style="display:none">
+      <label>字幕語言（預設台灣繁中，可自選；全不勾＝不下字幕）</label>
+      <div id="subPick" class="subpick"></div>
+    </div>
+
     <label>下載位置（留空＝~/Downloads；Windows 可填 D:\影片 等別的磁碟）</label>
     <input id="dir" placeholder="~/Downloads" autocomplete="off">
 
@@ -164,6 +172,10 @@
     <input id="spName" placeholder="自動">
     <label>畫質</label>
     <select id="spQuality"><option value="">最佳畫質（自動）</option></select>
+    <div id="spSubWrap" style="display:none">
+      <label>字幕語言（預設台灣繁中）</label>
+      <div id="spSubPick" class="subpick"></div>
+    </div>
     <label>下載位置</label>
     <input id="spDir" placeholder="~/Downloads">
     <div class="mbtns">
@@ -177,6 +189,33 @@
 const VDL_TOKEN = "__VDL_TOKEN__"; // server 注入；/download EventSource 帶上過 CSRF 閘門
 const $ = (id) => document.getElementById(id);
 function toast(t){const e=$("toast");e.textContent=t;e.classList.add("show");setTimeout(()=>e.classList.remove("show"),1800);}
+
+// 字幕語言選擇:預設勾台灣繁中;該片只有自動字幕時,只列中/英/日自動字幕當選項
+function isTW(l){ return /^zh(-?hant|-?tw|-?hk)/i.test(l); }
+const SUB_AUTO_SHOW=["zh-Hant","zh-TW","zh-Hant-TW","zh-Hans","zh","en","ja"];
+function fillSubPicker(box, subs, autoSubs){
+  subs=subs||[]; autoSubs=autoSubs||[];
+  const items=[], seen=new Set();
+  for(const l of subs){ if(!seen.has(l.toLowerCase())){ items.push({lang:l,auto:false}); seen.add(l.toLowerCase()); } }
+  for(const l of SUB_AUTO_SHOW){ if(autoSubs.includes(l) && !seen.has(l.toLowerCase())){ items.push({lang:l,auto:true}); seen.add(l.toLowerCase()); } }
+  box.innerHTML="";
+  if(!items.length) return false;
+  const hasTW=items.some(it=>isTW(it.lang));
+  for(const it of items){
+    const lab=document.createElement("label"); lab.className="subopt";
+    const cb=document.createElement("input"); cb.type="checkbox"; cb.value=it.lang;
+    cb.checked = hasTW ? isTW(it.lang) : !it.auto;
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(" "+it.lang+(it.auto?"（自動）":"")));
+    box.appendChild(lab);
+  }
+  return true;
+}
+function getSubLangs(box){
+  const all=box.querySelectorAll("input[type=checkbox]");
+  if(!all.length) return "";
+  const chk=[...box.querySelectorAll("input:checked")].map(c=>c.value);
+  return chk.length ? chk.join(",") : "none";
+}
 
 // 解析畫質
 $("probeBtn").addEventListener("click", async () => {
@@ -197,6 +236,7 @@ $("probeBtn").addEventListener("click", async () => {
       sel.appendChild(o);
     }
     $("qualityBox").style.display = r.formats.length? "block":"none";
+    $("subBox").style.display = fillSubPicker($("subPick"), r.subs, r.autoSubs) ? "block":"none";
     toast(r.formats.length? ("找到 "+r.formats.length+" 種畫質"):"此站無多畫質，可直接下載");
   }catch(e){ toast("解析錯誤"); }
   finally{ btn.disabled=false; btn.textContent="解析畫質"; }
@@ -281,7 +321,7 @@ $("dlBtn").addEventListener("click", () => {
   const bar=el.querySelector("i"), pct=el.querySelector(".pct"), log=el.querySelector(".log");
   const term=[];
 
-  const qs=new URLSearchParams({url, format:fmt, name, referer, dir:$("dir").value.trim(), token:VDL_TOKEN});
+  const qs=new URLSearchParams({url, format:fmt, name, referer, dir:$("dir").value.trim(), subLangs:getSubLangs($("subPick")), token:VDL_TOKEN});
   const es=new EventSource("/download?"+qs.toString());
 
   // ✕：取消下載並移除卡片（關閉 EventSource → 後端 yt-dlp 被 kill）
@@ -384,7 +424,8 @@ function openSpec(item){
         sel.appendChild(o);
       }
     } else { best.textContent="最佳畫質（此站無法解析畫質）"; }
-  }).catch(()=>{ sel.disabled=false; sel.innerHTML='<option value="">最佳畫質（自動）</option>'; });
+      $("spSubWrap").style.display = (r.ok && fillSubPicker($("spSubPick"), r.subs, r.autoSubs)) ? "block":"none";
+  }).catch(()=>{ sel.disabled=false; sel.innerHTML='<option value="">最佳畫質（自動）</option>'; $("spSubWrap").style.display="none"; });
 }
 function closeSpec(){ $("specMask").classList.remove("show"); curPending=null; }
 async function resolvePending(id){
@@ -396,7 +437,7 @@ $("spCancel").addEventListener("click", async ()=>{ const id=curPending&&curPend
 $("spOk").addEventListener("click", async ()=>{
   const item=curPending; if(!item) return;
   const dir=$("spDir").value.trim(); localStorage.setItem("dl_dir", dir);
-  const body={ url:item.url, referer:item.referer, name:$("spName").value.trim(), format:$("spQuality").value, dir, browser:item.browser||"" };
+  const body={ url:item.url, referer:item.referer, name:$("spName").value.trim(), format:$("spQuality").value, dir, browser:item.browser||"", subLangs:getSubLangs($("spSubPick")) };
   closeSpec();
   await resolvePending(item.id);
   try{ await fetch("/enqueue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); toast("開始下載"); }

@@ -223,6 +223,14 @@ function canonicalUrl(url) {
   return url;
 }
 
+// 字幕參數:subLangs 逗號語言清單;"none"/空=不下字幕;undefined=預設台灣繁中。
+// --write-auto-subs 讓「選的語言只有自動字幕」時也抓得到;--sub-langs 限制範圍不洗版。
+function subArgs(subLangs) {
+  if (subLangs === "none") return [];
+  const langs = (subLangs && String(subLangs).trim()) ? String(subLangs).trim() : "zh-Hant,zh-TW,zh-Hant-TW,zh";
+  return ["--write-subs", "--write-auto-subs", "--sub-langs", langs, "--embed-subs", "--convert-subs", "srt"];
+}
+
 // 解析畫質：yt-dlp -J
 // 帶 cookie 解析：TikTok 等站沒 cookie 的 -J 會撞 JS challenge（rehydration 失敗）→ 列不出畫質、
 // 走不到下載。download 早就帶 cookie，probe 沒帶是漏洞，這裡補齊。
@@ -241,7 +249,9 @@ function probe(url, referer, browser) {
         size: f.filesize || f.filesize_approx || 0,
       }))
       .sort((a, b) => (b.height - a.height) || (b.tbr - a.tbr));
-    return { ok: true, title: j.title || "", formats: fmts };
+    const subs = Object.keys(j.subtitles || {});           // 真人字幕語言
+    const autoSubs = Object.keys(j.automatic_captions || {}); // 自動字幕語言(可能上百)
+    return { ok: true, title: j.title || "", formats: fmts, subs, autoSubs };
   };
   const run = (args, isRetry) => new Promise((resolve) => {
     let out = "", err = "";
@@ -318,6 +328,7 @@ const server = http.createServer(async (req, res) => {
     const fmt = u.searchParams.get("format") || "";
     const name = sanitizeName(u.searchParams.get("name") || "");
     const referer = u.searchParams.get("referer") || "";
+    const subLangs = u.searchParams.get("subLangs");
     const outDir = expandDir(u.searchParams.get("dir") || ""); // 可指定下載夾（Windows 別的磁碟也行）
     if (!url) { send(res, 400, "text/plain", "no url"); return; }
 
@@ -329,7 +340,7 @@ const server = http.createServer(async (req, res) => {
     const ev = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
     // cookie：該站有擴充推來的 cookie 檔就用檔，否則借來源瀏覽器
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(url, u.searchParams.get("browser")), ...siteHeaders(url, referer), "--merge-output-format", "mp4"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(url, u.searchParams.get("browser")), ...siteHeaders(url, referer), "--merge-output-format", "mp4", ...subArgs(subLangs)];
     if (fmt) args.push("-f", fmt);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (referer) args.push("--referer", referer);
@@ -384,7 +395,7 @@ const server = http.createServer(async (req, res) => {
     // --cookies-from-browser：借「觸發下載的那個瀏覽器」的 cookie（Brave 嗅到的要借 Brave 的，
     // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403）。破 anime1 / CF+cookie 鎖站。（對照表在檔頭 probe 上方）
     const outDir = expandDir(b.dir);
-    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(b.url, b.browser), ...siteHeaders(b.url, b.referer), "--merge-output-format", "mp4"];
+    const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(b.url, b.browser), ...siteHeaders(b.url, b.referer), "--merge-output-format", "mp4", ...subArgs(b.subLangs)];
     if (b.format) args.push("-f", b.format);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (b.referer) args.push("--referer", b.referer);
