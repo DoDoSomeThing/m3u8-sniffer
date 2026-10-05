@@ -166,6 +166,38 @@ const COOKIE_BROWSERS = { chrome: "chrome", brave: "brave", edge: "edge", opera:
 // 一站一檔（檔名=註冊網域，如 douyin.com.txt），0600。有檔就用 --cookies <檔> 取代 --cookies-from-browser。
 const COOKIE_DIR = path.join(os.homedir(), ".videodl_cookies");
 try { fs.mkdirSync(COOKIE_DIR, { recursive: true, mode: 0o700 }); } catch {}
+
+// 下載暫存夾:建在「下載資料夾裡」的 .videodl_tmp/<id> 子夾(同一顆碟 → 成品搬回瞬間、無跨碟問題)。
+// 碎檔/.part 全在這子夾,下載中下載夾只多一個 .videodl_tmp 子夾,不散一堆碎檔;完成即清。
+const TMP_SUB = ".videodl_tmp";
+// 啟動時清掉預設下載夾的孤兒暫存(上次中斷/當掉殘留;指定別的夾那份由各下載自己 rmTemp 清)
+try { fs.rmSync(path.join(DLDIR, TMP_SUB), { recursive: true, force: true }); } catch {}
+function jobTemp(outDir, id) {
+  const d = path.join(outDir, TMP_SUB, String(id).replace(/[^\w.-]/g, "_"));
+  try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  return d;
+}
+function rmTemp(d) {
+  try {
+    if (!d || path.basename(path.dirname(d)) !== TMP_SUB) return; // 只刪 .videodl_tmp 底下的子夾,保險
+    fs.rmSync(d, { recursive: true, force: true });
+    try { fs.rmdirSync(path.dirname(d)); } catch {} // 父 .videodl_tmp 空了就收掉
+  } catch {}
+}
+// 下載成功後把暫存夾的成品搬到真正下載夾:同碟秒搬(rename);跨碟(EXDEV)改 copy+刪。回傳搬了幾個檔。
+function moveOut(tmp, outDir) {
+  let n = 0;
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    for (const name of fs.readdirSync(tmp)) {
+      const src = path.join(tmp, name), dst = path.join(outDir, name);
+      try { fs.renameSync(src, dst); }
+      catch (e) { if (e.code === "EXDEV") { fs.copyFileSync(src, dst); fs.unlinkSync(src); } else throw e; }
+      n++;
+    }
+  } catch (e) { console.error("[moveOut]", e.message); }
+  return n;
+}
 function cookieFileFor(url) {
   let host = "";
   try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
@@ -330,6 +362,7 @@ const server = http.createServer(async (req, res) => {
     const referer = u.searchParams.get("referer") || "";
     const subLangs = u.searchParams.get("subLangs");
     const outDir = expandDir(u.searchParams.get("dir") || ""); // 可指定下載夾（Windows 別的磁碟也行）
+    const tmp = jobTemp(outDir, "sse" + Date.now()); // 先下到暫存夾,成功才搬回 outDir
     if (!url) { send(res, 400, "text/plain", "no url"); return; }
 
     res.writeHead(200, {
@@ -344,7 +377,7 @@ const server = http.createServer(async (req, res) => {
     if (fmt) args.push("-f", fmt);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (referer) args.push("--referer", referer);
-    args.push("-o", path.join(outDir, (name ? name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), url);
+    args.push("-o", path.join(tmp, (name ? name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), url);
 
     ev({ type: "log", line: "yt-dlp " + args.join(" ") });
 
@@ -353,11 +386,12 @@ const server = http.createServer(async (req, res) => {
     const runDl = (dlArgs, isRetry) => {
       const p = spawnDl(dlArgs);
       curP = p;
-      let cookieFail = false;
+      let cookieFail = false, http2Fail = false;
       const onLine = (buf) => {
         for (const line of buf.toString().split(/\r?\n/)) {
           if (!line.trim()) continue;
           if (/could not copy .*cookie|cookies? from .*browser|cookie database/i.test(line)) cookieFail = true;
+          if (/Violation in HTTP messaging rule|curl: ?\(92\)|invalid frame/i.test(line)) http2Fail = true;
           const m = line.match(/\[download\]\s+([\d.]+)%/);
           if (m) ev({ type: "progress", pct: parseFloat(m[1]), line });
           else ev({ type: "log", line });
@@ -366,16 +400,20 @@ const server = http.createServer(async (req, res) => {
       p.stdout.on("data", onLine);
       p.stderr.on("data", onLine);
       p.on("close", (code) => {
-        if (code !== 0 && !isRetry && cookieFail) {
-          const noCookie = dlArgs.filter((a, i) => a !== "--cookies-from-browser" && dlArgs[i - 1] !== "--cookies-from-browser");
-          ev({ type: "log", line: "cookie 讀取失敗，改用無 cookie 重試…" });
-          runDl(noCookie, true);
+        if (code !== 0 && !isRetry && (cookieFail || http2Fail)) {
+          let retry = dlArgs;
+          if (cookieFail) retry = retry.filter((a, i) => a !== "--cookies-from-browser" && retry[i - 1] !== "--cookies-from-browser");
+          if (http2Fail) retry = retry.filter((a, i) => a !== "--impersonate" && retry[i - 1] !== "--impersonate");
+          ev({ type: "log", line: http2Fail ? "對方站 HTTP/2 不相容，改用 HTTP/1.1 重試…" : "cookie 讀取失敗，改用無 cookie 重試…" });
+          runDl(retry, true);
           return;
         }
+        if (code === 0) { const moved = moveOut(tmp, outDir); ev({ type: "log", line: "已存到下載夾（搬移 " + moved + " 檔）" }); }
+        rmTemp(tmp);
         ev({ type: code === 0 ? "done" : "error", code });
         res.end();
       });
-      p.on("error", (e) => { ev({ type: "error", line: String(e.message) }); res.end(); });
+      p.on("error", (e) => { rmTemp(tmp); ev({ type: "error", line: String(e.message) }); res.end(); });
     };
     runDl(args, false);
 
@@ -395,11 +433,12 @@ const server = http.createServer(async (req, res) => {
     // --cookies-from-browser：借「觸發下載的那個瀏覽器」的 cookie（Brave 嗅到的要借 Brave 的，
     // 借錯瀏覽器會缺登入態 → X/NSFW/CF 站 403）。破 anime1 / CF+cookie 鎖站。（對照表在檔頭 probe 上方）
     const outDir = expandDir(b.dir);
+    const tmp = jobTemp(outDir, "e" + Date.now()); // 先下到暫存夾,成功才搬回 outDir
     const args = ["--newline", "--no-warnings", "--concurrent-fragments", "8", "--no-mtime", "--impersonate", "chrome", ...cookieTokens(b.url, b.browser), ...siteHeaders(b.url, b.referer), "--merge-output-format", "mp4", ...subArgs(b.subLangs)];
     if (b.format) args.push("-f", b.format);
     else args.push("-S", "vcodec:h264,res,acodec:aac"); // 沒指定畫質時偏好 H.264+AAC，避開 QuickTime 吃不動的 AV1
     if (b.referer) args.push("--referer", b.referer);
-    args.push("-o", path.join(outDir, (b.name ? b.name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), b.url);
+    args.push("-o", path.join(tmp, (b.name ? b.name.replace(/%/g, "%%") : "%(title)s") + ".%(ext)s"), b.url);
 
     console.log("[enqueue] yt-dlp " + args.join(" "));
     const job = {
@@ -423,7 +462,7 @@ const server = http.createServer(async (req, res) => {
         PROCS[job.id] = p;
         let lastErr = "";
         let skipped = false;
-        let cookieFail = false;
+        let cookieFail = false, http2Fail = false;
         const onLine = (buf) => {
           for (const line of buf.toString().split(/\r?\n/)) {
             if (!line.trim()) continue;
@@ -431,6 +470,7 @@ const server = http.createServer(async (req, res) => {
             if (dest) job.name = dest[1].split("/").pop();
             if (/has already been downloaded/.test(line)) skipped = true; // 同名檔已存在，yt-dlp 沒下就收工
             if (/could not copy .*cookie|cookies? from .*browser|cookie database/i.test(line)) cookieFail = true;
+          if (/Violation in HTTP messaging rule|curl: ?\(92\)|invalid frame/i.test(line)) http2Fail = true;
             const m = line.match(/\[download\]\s+([\d.]+)%/);
             if (m) { job.pct = parseFloat(m[1]); job.log = line; }
             else { job.log = line; if (/error|ERROR/.test(line)) lastErr = line; }
@@ -446,19 +486,21 @@ const server = http.createServer(async (req, res) => {
         p.stderr.on("data", onLine);
         p.on("close", (code) => {
           delete PROCS[job.id];
-          if (job.status === "cancelled") return; // 使用者取消，不覆寫
-          if (code === 0) { job.status = "done"; job.pct = 100; job.log = skipped ? "⚠ 同名檔已存在，未重新下載（要重下請先刪/改名舊檔）" : "完成"; return; }
-          if (!isRetry && cookieFail) {
-            // 去掉 --cookies-from-browser <src> 兩個 token 後重試
-            const noCookie = dlArgs.filter((a, i) => a !== "--cookies-from-browser" && dlArgs[i - 1] !== "--cookies-from-browser");
-            job.pct = 0; job.log = "cookie 讀取失敗（瀏覽器開著鎖住），改用無 cookie 重試…";
-            runDl(noCookie, true);
+          if (job.status === "cancelled") { rmTemp(tmp); return; } // 使用者取消 → 連暫存碎檔一起清
+          if (code === 0) { const moved = moveOut(tmp, outDir); rmTemp(tmp); job.status = "done"; job.pct = 100; job.log = "完成（已存到下載夾）"; return; }
+          if (!isRetry && (cookieFail || http2Fail)) {
+            let retry = dlArgs;
+            if (cookieFail) retry = retry.filter((a, i) => a !== "--cookies-from-browser" && retry[i - 1] !== "--cookies-from-browser");
+            if (http2Fail) retry = retry.filter((a, i) => a !== "--impersonate" && retry[i - 1] !== "--impersonate");
+            job.pct = 0; job.log = http2Fail ? "對方站 HTTP/2 不相容，改用 HTTP/1.1 重試…" : "cookie 讀取失敗（瀏覽器鎖住），改用無 cookie 重試…";
+            runDl(retry, true);
             return;
           }
+          rmTemp(tmp); // 失敗 → 清暫存碎檔
           job.status = "error";
           job.log = cookieFail ? "cookie 讀取失敗且無 cookie 也下不了（此站需登入態，請關閉該瀏覽器再試）" : (lastErr || ("yt-dlp 結束碼 " + code));
         });
-        p.on("error", (e) => { delete PROCS[job.id]; job.status = "error"; job.log = "找不到 yt-dlp：" + e.message; });
+        p.on("error", (e) => { delete PROCS[job.id]; rmTemp(tmp); job.status = "error"; job.log = "找不到 yt-dlp：" + e.message; });
       };
       runDl(args, false);
       send(res, 200, "application/json", JSON.stringify({ ok: true, id: job.id }));
