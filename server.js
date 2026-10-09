@@ -386,12 +386,13 @@ const server = http.createServer(async (req, res) => {
     const runDl = (dlArgs, isRetry) => {
       const p = spawnDl(dlArgs);
       curP = p;
-      let cookieFail = false, http2Fail = false;
+      let cookieFail = false, http2Fail = false, sslFail = false;
       const onLine = (buf) => {
         for (const line of buf.toString().split(/\r?\n/)) {
           if (!line.trim()) continue;
           if (/could not copy .*cookie|cookies? from .*browser|cookie database/i.test(line)) cookieFail = true;
           if (/Violation in HTTP messaging rule|curl: ?\(92\)|invalid frame/i.test(line)) http2Fail = true;
+          if (/curl: ?\(60\)|SSL certificate problem|self.signed certificate|certificate verify/i.test(line)) sslFail = true;
           const m = line.match(/\[download\]\s+([\d.]+)%/);
           if (m) ev({ type: "progress", pct: parseFloat(m[1]), line });
           else ev({ type: "log", line });
@@ -400,11 +401,12 @@ const server = http.createServer(async (req, res) => {
       p.stdout.on("data", onLine);
       p.stderr.on("data", onLine);
       p.on("close", (code) => {
-        if (code !== 0 && !isRetry && (cookieFail || http2Fail)) {
+        if (code !== 0 && !isRetry && (cookieFail || http2Fail || sslFail)) {
           let retry = dlArgs;
           if (cookieFail) retry = retry.filter((a, i) => a !== "--cookies-from-browser" && retry[i - 1] !== "--cookies-from-browser");
           if (http2Fail) retry = retry.filter((a, i) => a !== "--impersonate" && retry[i - 1] !== "--impersonate");
-          ev({ type: "log", line: http2Fail ? "對方站 HTTP/2 不相容，改用 HTTP/1.1 重試…" : "cookie 讀取失敗，改用無 cookie 重試…" });
+          if (sslFail && !retry.includes("--no-check-certificates")) retry = [...retry, "--no-check-certificates"]; // 對方憑證自簽 → 略過驗證
+          ev({ type: "log", line: sslFail ? "對方站憑證有問題（自簽），略過憑證驗證重試…" : http2Fail ? "對方站 HTTP/2 不相容，改用 HTTP/1.1 重試…" : "cookie 讀取失敗，改用無 cookie 重試…" });
           runDl(retry, true);
           return;
         }
@@ -462,7 +464,7 @@ const server = http.createServer(async (req, res) => {
         PROCS[job.id] = p;
         let lastErr = "";
         let skipped = false;
-        let cookieFail = false, http2Fail = false;
+        let cookieFail = false, http2Fail = false, sslFail = false;
         const onLine = (buf) => {
           for (const line of buf.toString().split(/\r?\n/)) {
             if (!line.trim()) continue;
@@ -471,6 +473,7 @@ const server = http.createServer(async (req, res) => {
             if (/has already been downloaded/.test(line)) skipped = true; // 同名檔已存在，yt-dlp 沒下就收工
             if (/could not copy .*cookie|cookies? from .*browser|cookie database/i.test(line)) cookieFail = true;
           if (/Violation in HTTP messaging rule|curl: ?\(92\)|invalid frame/i.test(line)) http2Fail = true;
+          if (/curl: ?\(60\)|SSL certificate problem|self.signed certificate|certificate verify/i.test(line)) sslFail = true;
             const m = line.match(/\[download\]\s+([\d.]+)%/);
             if (m) { job.pct = parseFloat(m[1]); job.log = line; }
             else { job.log = line; if (/error|ERROR/.test(line)) lastErr = line; }
@@ -488,11 +491,12 @@ const server = http.createServer(async (req, res) => {
           delete PROCS[job.id];
           if (job.status === "cancelled") { rmTemp(tmp); return; } // 使用者取消 → 連暫存碎檔一起清
           if (code === 0) { const moved = moveOut(tmp, outDir); rmTemp(tmp); job.status = "done"; job.pct = 100; job.log = "完成（已存到下載夾）"; return; }
-          if (!isRetry && (cookieFail || http2Fail)) {
+          if (!isRetry && (cookieFail || http2Fail || sslFail)) {
             let retry = dlArgs;
             if (cookieFail) retry = retry.filter((a, i) => a !== "--cookies-from-browser" && retry[i - 1] !== "--cookies-from-browser");
             if (http2Fail) retry = retry.filter((a, i) => a !== "--impersonate" && retry[i - 1] !== "--impersonate");
-            job.pct = 0; job.log = http2Fail ? "對方站 HTTP/2 不相容，改用 HTTP/1.1 重試…" : "cookie 讀取失敗（瀏覽器鎖住），改用無 cookie 重試…";
+            if (sslFail && !retry.includes("--no-check-certificates")) retry = [...retry, "--no-check-certificates"]; // 對方憑證自簽 → 略過驗證
+            job.pct = 0; job.log = sslFail ? "對方站憑證有問題（自簽），略過憑證驗證重試…" : http2Fail ? "對方站 HTTP/2 不相容，改用 HTTP/1.1 重試…" : "cookie 讀取失敗（瀏覽器鎖住），改用無 cookie 重試…";
             runDl(retry, true);
             return;
           }

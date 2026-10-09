@@ -274,6 +274,7 @@ function errorHint(txt){
     [/HTTP Error 404/i,"網址失效(404)","影片或連結不存在，重抓網址"],
     [/HTTP Error 429|Too Many Requests/i,"被限流(太頻繁)","等一下再試，或減少同時下載"],
     [/Violation in HTTP messaging rule|curl: ?\(92\)|invalid frame/i,"對方站 HTTP/2 不相容","已自動改 HTTP/1.1 重試;若仍失敗重下一次"],
+    [/curl: ?\(60\)|SSL certificate problem|self.signed|certificate verify/i,"對方站 SSL 憑證有問題(自簽/無效)","已自動略過憑證驗證重試;若仍失敗重下一次"],
     [/Unable to.*extract|rehydration/i,"yt-dlp 抽取器過期","按上方「立即更新」更新 yt-dlp 再試"],
   ];
   for(const [re,cause,fix] of M) if(re.test(t)) return {cause,fix};
